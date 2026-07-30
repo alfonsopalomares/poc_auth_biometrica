@@ -1,0 +1,31 @@
+# Archivos de entorno y dependencias de Python
+.venv/
+venv/
+
+# Archivos compilados y caché de Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Base de datos de SQLite generada por el backend
+/backend/*.db
+/backend/*.db-journal
+
+# Archivos de log generados por los scripts
+*.log
+
+# Modelos de IA descargados
+/backend/pretrained_models/
+
+# Especificación OpenAPI generada
+/backend/openapi.json
+
+# Dependencias y artefactos de construcción del Frontend
+/frontend/node_modules/
+/frontend/dist/
+/frontend/.env
+/frontend/.env.local
+
+# Archivos específicos del sistema operativo (macOS)
+.DS_Store

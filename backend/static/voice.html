@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Autenticación por Voz</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 2em; background-color: #f8f9fa; color: #212529; }
+        .container { max-width: 900px; margin: 20px auto; background-color: #fff; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); padding: 0; }
+        .content { padding: 20px; max-width: 600px; margin: 0 auto; }
+        h1, h2 { color: #1a253c; border-bottom: 2px solid #e1e4e8; padding-bottom: 10px; margin-top: 0; }
+        h2 { font-size: 1.2em; margin-top: 30px; }
+        .nav-menu { list-style-type: none; margin: 0; padding: 0; overflow: hidden; background-color: #343a40; border-radius: 8px 8px 0 0; }
+        .nav-menu li { float: left; }
+        .nav-menu li a { display: block; color: white; text-align: center; padding: 14px 16px; text-decoration: none; font-weight: 500; }
+        .nav-menu li a:hover:not(.active) { background-color: #495057; }
+        .nav-menu li a.active { background-color: #007bff; }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 1em;
+            margin: 5px;
+        }
+        button:hover { background-color: #0056b3; }
+        button:disabled { background-color: #6c757d; cursor: not-allowed; }
+        button.stop-btn { background-color: #dc3545; }
+        button.stop-btn:hover { background-color: #c82333; }
+        input[type="text"] { font-size: 16px; padding: 10px; border: 1px solid #d1d5da; border-radius: 6px; width: calc(100% - 22px); }
+        .form-group, .action-group { margin-bottom: 20px; }
+        label { display: block; font-weight: 600; margin-bottom: 5px; }
+        pre { background-color: #24292e; color: #f6f8fa; padding: 15px; border-radius: 6px; white-space: pre-wrap; word-wrap: break-word; font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace; font-size: 14px; margin-top: 1em; }
+        .status-light { height: 12px; width: 12px; background-color: #6c757d; border-radius: 50%; display: inline-block; margin-right: 8px; }
+        .status-light.recording { background-color: #dc3545; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <ul class="nav-menu">
+            <li><a href="/admin">Inicio</a></li>
+            <li><a href="/admin/user">Crear Usuario</a></li>
+            <li><a class="active" href="/admin/voice">Gestión de Voz</a></li>
+            <li><a href="/admin/gesture">Gestión de Gesto</a></li>
+        </ul>
+        <div class="content">
+            <h1>Autenticación por Voz</h1>
+            
+            <div class="form-group">
+                <label for="username">Nombre de Usuario:</label>
+                <input type="text" id="username" placeholder="ej: juan.perez" value="carlos">
+            </div>
+
+            <div class="form-group">
+                <span id="statusLight" class="status-light"></span>
+                <span id="statusText">Listo para grabar.</span>
+            </div>
+
+            <button id="stopRecordingBtn" class="stop-btn hidden">Detener Grabación</button>
+
+            <!-- Sección de Registro -->
+            <div class="action-group">
+                <h2>1. Registro de Voz (Enrollment)</h2>
+                <p>Graba una frase de al menos 5 segundos para registrar tu perfil de voz.</p>
+                <button id="enrollBtn">Grabar para Registrar</button>
+                <button id="playEnrollBtn">Reproducir Voz Registrada</button>
+                <audio id="enrollAudio" controls class="hidden"></audio>
+            </div>
+
+            <!-- Sección de Verificación -->
+            <div class="action-group">
+                <h2>2. Verificación de Voz</h2>
+                <p>Graba la misma frase para verificar tu identidad.</p>
+                <button id="verifyBtn">Grabar para Verificar</button>
+                <button id="playVerifyBtn" disabled>Reproducir Voz de Verificación</button>
+                <audio id="verifyAudio" controls class="hidden"></audio>
+            </div>
+
+            <pre id="result">Esperando acción...</pre>
+        </div>
+    </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    // Elementos del DOM
+    const usernameInput = document.getElementById('username');
+    const enrollBtn = document.getElementById('enrollBtn');
+    const verifyBtn = document.getElementById('verifyBtn');
+    const stopRecordingBtn = document.getElementById('stopRecordingBtn');
+    const playEnrollBtn = document.getElementById('playEnrollBtn');
+    const playVerifyBtn = document.getElementById('playVerifyBtn');
+    const enrollAudio = document.getElementById('enrollAudio');
+    const verifyAudio = document.getElementById('verifyAudio');
+    const resultPre = document.getElementById('result');
+    const statusLight = document.getElementById('statusLight');
+    const statusText = document.getElementById('statusText');
+
+    // Estado de la aplicación
+    let mediaRecorder;
+    let audioChunks = [];
+    let currentAction = null; // 'enroll' o 'verify'
+    let verificationBlob = null;
+
+    // --- Lógica de Grabación ---
+
+    const startRecording = async (action) => {
+        if (!usernameInput.value.trim()) {
+            resultPre.textContent = 'Por favor, introduce un nombre de usuario.';
+            return;
+        }
+        currentAction = action;
+        audioChunks = [];
+        
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder = new MediaRecorder(stream);
+            
+            mediaRecorder.ondataavailable = event => {
+                audioChunks.push(event.data);
+            };
+
+            mediaRecorder.onstart = () => {
+                updateStatus(true, `Grabando para ${action}...`);
+                enrollBtn.disabled = true;
+                verifyBtn.disabled = true;
+                stopRecordingBtn.classList.remove('hidden');
+            };
+
+            mediaRecorder.onstop = async () => {
+                updateStatus(false, 'Procesando audio...');
+                const audioBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
+                
+                // Convertir a WAV antes de enviar
+                const wavBlob = await convertBlobToWav(audioBlob);
+
+                if (currentAction === 'enroll') {
+                    handleEnroll(wavBlob);
+                } else if (currentAction === 'verify') {
+                    verificationBlob = wavBlob; // Guardar para reproducción
+                    playVerifyBtn.disabled = false;
+                    handleVerify(wavBlob);
+                }
+
+                // Limpiar y reactivar UI
+                stream.getTracks().forEach(track => track.stop());
+                enrollBtn.disabled = false;
+                verifyBtn.disabled = false;
+                stopRecordingBtn.classList.add('hidden');
+                updateStatus(false, 'Listo para grabar.');
+            };
+
+            mediaRecorder.start();
+        } catch (error) {
+            console.error('Error al iniciar la grabación:', error);
+            resultPre.textContent = `Error al acceder al micrófono: ${error.message}`;
+            updateStatus(false, 'Error de micrófono.');
+        }
+    };
+
+    const stopRecording = () => {
+        if (mediaRecorder && mediaRecorder.state === 'recording') {
+            mediaRecorder.stop();
+        }
+    };
+
+    // --- Lógica de API ---
+
+    const handleEnroll = async (blob) => {
+        const username = usernameInput.value.trim();
+        resultPre.textContent = `Registrando voz para ${username}...`;
+        
+        const formData = new FormData();
+        formData.append('username', username);
+        formData.append('audio', blob, `${username}_enroll.wav`);
+
+        try {
+            const response = await fetch('/api/enroll', {
+                method: 'POST',
+                body: formData,
+            });
+            const data = await response.json();
+            resultPre.textContent = JSON.stringify(data, null, 2);
+            if (!response.ok) throw new Error(data.detail || 'Error en el servidor');
+        } catch (error) {
+            resultPre.textContent = `Error en el registro: ${error.message}`;
+        }
+    };
+
+    const handleVerify = async (blob) => {
+        const username = usernameInput.value.trim();
+        resultPre.textContent = `Verificando voz para ${username}...`;
+
+        const formData = new FormData();
+        formData.append('username', username);
+        formData.append('audio', blob, `${username}_verify.wav`);
+
+        try {
+            const response = await fetch('/api/verify', {
+                method: 'POST',
+                body: formData,
+            });
+            const data = await response.json();
+            resultPre.textContent = JSON.stringify(data, null, 2);
+            if (!response.ok) throw new Error(data.detail || 'Error en el servidor');
+        } catch (error) {
+            resultPre.textContent = `Error en la verificación: ${error.message}`;
+        }
+    };
+
+    // --- Lógica de Reproducción ---
+
+    const playEnrolledVoice = async () => {
+        const username = usernameInput.value.trim();
+        if (!username) {
+            resultPre.textContent = 'Introduce un nombre de usuario para buscar su audio.';
+            return;
+        }
+        resultPre.textContent = `Buscando audio para ${username}...`;
+        try {
+            const response = await fetch(`/api/audio/${username}`);
+            if (!response.ok) {
+                throw new Error(`No se encontró audio para el usuario o hubo un error: ${response.statusText}`);
+            }
+            const audioBlob = await response.blob();
+            const audioUrl = URL.createObjectURL(audioBlob);
+            enrollAudio.src = audioUrl;
+            enrollAudio.classList.remove('hidden');
+            enrollAudio.play();
+            resultPre.textContent = `Reproduciendo audio registrado de ${username}.`;
+        } catch (error) {
+            resultPre.textContent = `Error al reproducir: ${error.message}`;
+        }
+    };
+
+    const playVerificationAudio = () => {
+        if (verificationBlob) {
+            const audioUrl = URL.createObjectURL(verificationBlob);
+            verifyAudio.src = audioUrl;
+            verifyAudio.classList.remove('hidden');
+            verifyAudio.play();
+            resultPre.textContent = 'Reproduciendo último audio de verificación.';
+        } else {
+            resultPre.textContent = 'No hay audio de verificación para reproducir. Graba uno primero.';
+        }
+    };
+
+    // --- Utilidades ---
+
+    const updateStatus = (isRecording, text) => {
+        statusText.textContent = text;
+        if (isRecording) {
+            statusLight.classList.add('recording');
+        } else {
+            statusLight.classList.remove('recording');
+        }
+    };
+
+    /**
+     * Convierte un Blob de audio (ej. webm/opus) a formato WAV usando AudioContext.
+     * Esto es crucial para que la librería `librosa` en el backend pueda procesarlo.
+     */
+    async function convertBlobToWav(blob) {
+        // Si el navegador ya graba en WAV (poco probable) o no soporta AudioContext, devolver el blob original.
+        if (blob.type === 'audio/wav' || (typeof AudioContext === 'undefined' && typeof webkitAudioContext === 'undefined')) {
+            console.warn('AudioContext no soportado o el audio ya es WAV. Se envía el blob original.');
+            return blob;
+        }
+
+        try {
+            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const arrayBuffer = await blob.arrayBuffer();
+            const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+            
+            const wavBuffer = audioBufferToWav(audioBuffer);
+            return new Blob([wavBuffer], { type: 'audio/wav' });
+        } catch (e) {
+            console.error('Fallo al convertir a WAV, se enviará el blob original:', e);
+            return blob; // Fallback al blob original
+        }
+    }
+
+    /**
+     * Codifica un AudioBuffer a un ArrayBuffer en formato WAV.
+     */
+    function audioBufferToWav(buffer) {
+        const numOfChan = buffer.numberOfChannels;
+        const length = buffer.length * numOfChan * 2 + 44;
+        const arrayBuffer = new ArrayBuffer(length);
+        const view = new DataView(arrayBuffer);
+        const channels = [];
+        let i, sample;
+        let offset = 0;
+        let pos = 0;
+
+        // Escribir cabecera WAV
+        setUint32(0x46464952); // "RIFF"
+        setUint32(length - 8); // file length - 8
+        setUint32(0x45564157); // "WAVE"
+
+        setUint32(0x20746d66); // "fmt " chunk
+        setUint32(16); // length = 16
+        setUint16(1); // PCM (uncompressed)
+        setUint16(numOfChan);
+        setUint32(buffer.sampleRate);
+        setUint32(buffer.sampleRate * 2 * numOfChan); // avg. bytes/sec
+        setUint16(numOfChan * 2); // block-align
+        setUint16(16); // 16-bit
+
+        setUint32(0x61746164); // "data" - chunk
+        setUint32(length - pos - 4); // chunk length
+
+        // Escribir datos PCM
+        for (i = 0; i < buffer.numberOfChannels; i++) {
+            channels.push(buffer.getChannelData(i));
+        }
+
+        while (pos < length) {
+            for (i = 0; i < numOfChan; i++) {
+                sample = Math.max(-1, Math.min(1, channels[i][offset])); // clamp
+                sample = (0.5 + sample < 0 ? sample * 32768 : sample * 32767) | 0; // scale to 16-bit signed int
+                view.setInt16(pos, sample, true); // write 16-bit sample
+                pos += 2;
+            }
+            offset++;
+        }
+        
+        return arrayBuffer;
+
+        function setUint16(data) {
+            view.setUint16(pos, data, true);
+            pos += 2;
+        }
+
+        function setUint32(data) {
+            view.setUint32(pos, data, true);
+            pos += 4;
+        }
+    }
+
+    // Asignar eventos a los botones
+    enrollBtn.addEventListener('click', () => startRecording('enroll'));
+    verifyBtn.addEventListener('click', () => startRecording('verify'));
+    stopRecordingBtn.addEventListener('click', stopRecording);
+    playEnrollBtn.addEventListener('click', playEnrolledVoice);
+    playVerifyBtn.addEventListener('click', playVerificationAudio);
+});
+</script>
+
+</body>
+</html>

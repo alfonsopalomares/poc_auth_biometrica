@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Autenticación por Gesto</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 2em; background-color: #f8f9fa; color: #212529; }
+        .container { max-width: 900px; margin: 20px auto; background-color: #fff; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); padding: 0; }
+        .content { padding: 20px; }
+        h1, h2 { color: #1a253c; border-bottom: 2px solid #e1e4e8; padding-bottom: 10px; margin-top: 0; }
+        h2 { font-size: 1.2em; margin-top: 30px; }
+        h3 { font-size: 1em; color: #343a40; margin-bottom: 5px; }
+        .nav-menu { list-style-type: none; margin: 0; padding: 0; overflow: hidden; background-color: #343a40; border-radius: 8px 8px 0 0; }
+        .nav-menu li { float: left; }
+        .nav-menu li a { display: block; color: white; text-align: center; padding: 14px 16px; text-decoration: none; font-weight: 500; }
+        .nav-menu li a:hover:not(.active) { background-color: #495057; }
+        .nav-menu li a.active { background-color: #007bff; }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 1em;
+            margin: 5px;
+        }
+        button:hover { background-color: #0056b3; }
+        button:disabled { background-color: #6c757d; cursor: not-allowed; }
+        button.clear-btn { background-color: #dc3545; }
+        button.clear-btn:hover { background-color: #c82333; }
+        input[type="text"] { font-size: 16px; padding: 10px; border: 1px solid #d1d5da; border-radius: 6px; width: calc(100% - 22px); }
+        .form-group, .action-group { margin-bottom: 20px; }
+        label { display: block; font-weight: 600; margin-bottom: 5px; }
+        pre { background-color: #24292e; color: #f6f8fa; padding: 15px; border-radius: 6px; white-space: pre-wrap; word-wrap: break-word; font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace; font-size: 14px; margin-top: 1em; }
+        
+        .panels-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 30px; }
+        .panel { border: 1px solid #d1d5da; border-radius: 6px; padding: 20px; }
+        canvas { border: 2px dashed #ccc; cursor: crosshair; touch-action: none; width: 100%; aspect-ratio: 1.5; background-color: #fafafa; }
+        canvas.drawing { border-color: #007bff; }
+        .button-group { display: flex; gap: 10px; margin-top: 15px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <ul class="nav-menu">
+            <li><a href="/admin">Inicio</a></li>
+            <li><a href="/admin/user">Crear Usuario</a></li>
+            <li><a href="/admin/voice">Gestión de Voz</a></li>
+            <li><a class="active" href="/admin/gesture">Gestión de Gesto</a></li>
+        </ul>
+        <div class="content">
+            <h1>Autenticación por Gesto</h1>
+            
+            <div class="form-group">
+                <label for="username">Nombre de Usuario:</label>
+                <input type="text" id="username" placeholder="ej: juan.perez" value="carlos">
+            </div>
+
+            <div class="panels-grid">
+                <!-- Panel de Registro -->
+                <div class="panel">
+                    <h2>1. Registrar Gesto</h2>
+                    <p>Dibuja tu firma o patrón en el recuadro para guardarlo.</p>
+                    <canvas id="enroll-canvas"></canvas>
+                    <div class="button-group">
+                        <button id="enroll-btn" disabled>Registrar</button>
+                        <button id="enroll-clear-btn" class="clear-btn">Limpiar</button>
+                    </div>
+                </div>
+
+                <!-- Panel de Verificación -->
+                <div class="panel">
+                    <h2>2. Verificar Gesto</h2>
+                    <p>Dibuja de nuevo el patrón para verificar tu identidad.</p>
+                    <canvas id="verify-canvas"></canvas>
+                    <div class="button-group">
+                        <button id="verify-btn" disabled>Verificar</button>
+                        <button id="verify-clear-btn" class="clear-btn">Limpiar</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Panel de Comparación -->
+            <div class="panel" style="margin-top: 30px;">
+                <h2>3. Comparación Visual</h2>
+                <div class="panels-grid">
+                    <div>
+                        <h3>Patrón Almacenado</h3>
+                        <canvas id="stored-gesture-canvas"></canvas>
+                    </div>
+                    <div>
+                        <h3>Último Patrón Verificado</h3>
+                        <canvas id="verified-gesture-canvas"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <pre id="result">Esperando acción...</pre>
+        </div>
+    </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    // Elementos del DOM
+    const usernameInput = document.getElementById('username');
+    const resultPre = document.getElementById('result');
+
+    // Canvas y datos de Registro
+    const enrollCanvas = document.getElementById('enroll-canvas');
+    const enrollBtn = document.getElementById('enroll-btn');
+    const enrollClearBtn = document.getElementById('enroll-clear-btn');
+    let enrollPoints = [];
+
+    // Canvas y datos de Verificación
+    const verifyCanvas = document.getElementById('verify-canvas');
+    const verifyBtn = document.getElementById('verify-btn');
+    const verifyClearBtn = document.getElementById('verify-clear-btn');
+    let verifyPoints = [];
+
+    // Canvas de visualización
+    const storedCanvas = document.getElementById('stored-gesture-canvas');
+    const verifiedCanvas = document.getElementById('verified-gesture-canvas');
+
+    /**
+     * Configura un canvas para capturar gestos.
+     */
+    function setupCanvas(canvas, pointsArray, actionButton) {
+        const ctx = canvas.getContext('2d');
+        let drawing = false;
+        let startTime = 0;
+
+        function getPointerPos(e) {
+            const rect = canvas.getBoundingClientRect();
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            const x = (clientX - rect.left) / rect.width;
+            const y = (clientY - rect.top) / rect.height;
+            return { x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)) };
+        }
+
+        function startDrawing(e) {
+            e.preventDefault();
+            drawing = true;
+            canvas.classList.add('drawing');
+            pointsArray.length = 0;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.beginPath();
+            const { x, y } = getPointerPos(e);
+            ctx.moveTo(x * canvas.width, y * canvas.height);
+            startTime = Date.now();
+            pointsArray.push([x, y, 0]);
+        }
+
+        function draw(e) {
+            if (!drawing) return;
+            e.preventDefault();
+            const { x, y } = getPointerPos(e);
+            const time = (Date.now() - startTime) / 1000;
+            ctx.lineTo(x * canvas.width, y * canvas.height);
+            ctx.stroke();
+            pointsArray.push([x, y, time]);
+        }
+
+        function stopDrawing(e) {
+            if (!drawing) return;
+            e.preventDefault();
+            drawing = false;
+            canvas.classList.remove('drawing');
+            ctx.closePath();
+            if (pointsArray.length > 1) {
+                actionButton.disabled = false;
+            }
+        }
+        
+        canvas.addEventListener('pointerdown', startDrawing);
+        canvas.addEventListener('pointermove', draw);
+        canvas.addEventListener('pointerup', stopDrawing);
+        canvas.addEventListener('pointerleave', stopDrawing);
+    }
+
+    function clearCanvas(canvas, pointsArray, actionButton) {
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        pointsArray.length = 0;
+        actionButton.disabled = true;
+    }
+
+    function drawPath(canvas, points, color = 'blue') {
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (!points || points.length < 2) return;
+
+        ctx.beginPath();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 3;
+        
+        const firstPoint = points[0];
+        ctx.moveTo(firstPoint[0] * canvas.width, firstPoint[1] * canvas.height);
+
+        for (let i = 1; i < points.length; i++) {
+            const point = points[i];
+            ctx.lineTo(point[0] * canvas.width, point[1] * canvas.height);
+        }
+        ctx.stroke();
+        ctx.closePath();
+    }
+
+    async function apiCall(endpoint, payload) {
+        const username = usernameInput.value.trim();
+        if (!username) {
+            resultPre.textContent = 'Por favor, introduce un nombre de usuario.';
+            return;
+        }
+        resultPre.textContent = 'Procesando...';
+        try {
+            const response = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, points: payload })
+            });
+            const data = await response.json();
+            resultPre.textContent = JSON.stringify(data, null, 2);
+            
+            if (response.ok) {
+                if (endpoint.includes('verify')) {
+                    drawPath(verifiedCanvas, payload, 'green');
+                }
+                fetchAndDrawStoredGesture(username);
+            } else {
+                if (endpoint.includes('verify')) {
+                    drawPath(verifiedCanvas, payload, 'red');
+                }
+                throw new Error(data.detail || 'Error del servidor');
+            }
+        } catch (error) {
+            resultPre.textContent = `Error: ${error.message}`;
+        }
+    }
+
+    async function fetchAndDrawStoredGesture(username) {
+        try {
+            const response = await fetch(`/api/gesture/${username}`);
+            if (!response.ok) {
+                drawPath(storedCanvas, [], 'gray');
+                return;
+            }
+            const data = await response.json();
+            if (data.gesture_points) {
+                drawPath(storedCanvas, data.gesture_points, 'blue');
+            }
+        } catch (error) {
+            console.error('Error fetching stored gesture:', error);
+            resultPre.textContent = `No se pudo cargar el gesto almacenado para ${username}.`;
+        }
+    }
+
+    // Configuración inicial
+    setupCanvas(enrollCanvas, enrollPoints, enrollBtn);
+    setupCanvas(verifyCanvas, verifyPoints, verifyBtn);
+
+    enrollClearBtn.addEventListener('click', () => clearCanvas(enrollCanvas, enrollPoints, enrollBtn));
+    verifyClearBtn.addEventListener('click', () => clearCanvas(verifyCanvas, verifyPoints, verifyBtn));
+
+    enrollBtn.addEventListener('click', () => apiCall('/api/enroll/gesture', enrollPoints));
+    verifyBtn.addEventListener('click', () => apiCall('/api/verify/gesture', verifyPoints));
+
+    usernameInput.addEventListener('change', () => {
+        const username = usernameInput.value.trim();
+        if (username) {
+            fetchAndDrawStoredGesture(username);
+            drawPath(verifiedCanvas, [], 'gray'); // Limpiar canvas de verificación
+        }
+    });
+
+    // Cargar gesto al iniciar
+    fetchAndDrawStoredGesture(usernameInput.value);
+});
+</script>
+
+</body>
+</html>
