@@ -39,89 +39,43 @@ uvicorn app:app --reload
 
 El backend quedará disponible en `http://127.0.0.1:8000`.
 
-### API principal
+### Arquitectura de Autenticación
 
-#### `POST /api/challenge/request`
+Esta PoC implementa un sistema de autenticación multifactor (MFA) biométrico, diseñado con un enfoque en la seguridad y la accesibilidad.
 
-- Inicia la sesión de verificación.
-- Genera `session_id`, `seed` y el tipo de desafío.
+#### Flujo de Autenticación (MFA)
 
-Ejemplo de respuesta:
+El sistema utiliza un flujo de autenticación secuencial basado en sesiones. A cada usuario se le puede asignar una secuencia de factores biométricos requeridos (ej. `{"1": "voice", "2": "gesture"}`).
 
-```json
-{
-  "session_id": "abc123...",
-  "challenge_type": "voice_phrase",
-  "prompt": "Repite la frase 'abre la puerta' con tu voz.",
-  "seed": 123456789
-}
-```
+1.  **Inicio de Sesión (`POST /api/auth/start`):** Se inicia una sesión de autenticación para un usuario, generando un `session_id`. El sistema responde con un desafío para el primer factor de la secuencia.
+2.  **Verificación de Factores (`POST /api/verify` y `POST /api/verify/gesture`):** El usuario proporciona la biometría solicitada. El backend la procesa y, si es correcta, comprueba si se han completado todos los factores.
+    *   Si faltan factores, responde con un nuevo `challenge` para el siguiente factor en la secuencia.
+    *   Si todos los factores se han verificado correctamente, responde con `authorized`.
+    *   Si una verificación falla o se proporciona en el orden incorrecto, la sesión se invalida y responde con `denied`.
 
-#### `POST /api/verify/voice`
+#### Biometría de Voz
 
-- Recibe audio en `multipart/form-data` y el `session_id`.
-- Devuelve una puntuación de confianza `humanity_score`.
+-   **Modelo y Procesamiento:** Se utiliza un modelo pre-entrenado de última generación (`speechbrain/spkrec-ecapa-voxceleb`) para extraer las características únicas de la voz de un locutor.
+-   **Almacenamiento:** Durante el registro, el sistema procesa la voz del usuario para generar un vector numérico (un *embedding* de 192 dimensiones). **Solo este embedding se almacena en la base de datos**, no el archivo de audio original. Esto garantiza que la voz del usuario no pueda ser reconstruida a partir de los datos guardados.
+-   **Verificación:** Para verificar, se genera un nuevo embedding a partir del audio en vivo y se compara con el almacenado mediante **similitud del coseno**. Una puntuación alta indica una alta probabilidad de que sea el mismo locutor.
 
-Ejemplo de uso:
+#### Biometría de Gestos
 
-```bash
-curl -X POST "http://127.0.0.1:8000/api/verify/voice" \
-  -F "session_id=<SESSION_ID>" \
-  -F "audio=@path/to/audio.wav;type=audio/wav"
-```
+-   **Filosofía y Accesibilidad:** El sistema está diseñado para ser independiente de la posición y la escala. Un gesto dibujado en una esquina es matemáticamente idéntico a uno gigante en el centro, lo que es crucial para usuarios con discapacidad visual.
+-   **Almacenamiento (Cinemática como Biometría):** No nos interesa solo la forma del dibujo, sino *cómo* se dibujó. La velocidad y la aceleración del trazo son características biométricas únicas.
+    1.  El trazo se normaliza para eliminar variaciones de posición y tamaño.
+    2.  Se extraen las características cinemáticas (deltas `dx, dy, dt`) entre cada punto.
+    3.  Esta secuencia de deltas se procesa con un simulador de red neuronal recurrente (**LSTM**) para generar un *embedding* de 128 dimensiones.
+    4.  **Solo este embedding cinemático se almacena**, capturando tanto la forma como el ritmo del dibujo, lo que lo hace extremadamente difícil de falsificar.
 
-Ejemplo de respuesta:
+#### Pasos hacia un Sistema Productivo
 
-```json
-{
-  "humanity_score": 0.78,
-  "noise_score": 0.23,
-  "challenge_type": "voice_phrase"
-}
-```
+Esta PoC sienta las bases, pero para un sistema en producción se requeriría:
 
-#### `POST /api/verify/gesture`
-
-- Recibe la matriz temporal de puntos `[{x, y, t}]`.
-- Devuelve una puntuación de coincidencia del gesto.
-
-Ejemplo de cuerpo JSON:
-
-```json
-{
-  "session_id": "abc123...",
-  "points": [[0.0, 0.0, 0.0], [0.5, 0.5, 0.2], [1.0, 1.0, 0.4]]
-}
-```
-
-Ejemplo de respuesta:
-
-```json
-{
-  "gesture_score": 0.64,
-  "challenge_type": "gesture_pattern"
-}
-```
-
-#### `GET /api/auth/status/{session_id}`
-
-- Combina los resultados de voz y gesto.
-- Aplica una ponderación adaptativa según el ruido.
-
-Ejemplo de respuesta:
-
-```json
-{
-  "session_id": "abc123...",
-  "voice_score": 0.72,
-  "gesture_score": 0.60,
-  "noise_score": 0.18,
-  "voice_weight": 0.6,
-  "gesture_weight": 0.4,
-  "combined_score": 0.67,
-  "auth_status": "authorized"
-}
-```
+-   **Entrenamiento de Modelos Propios:** Recolectar un dataset de gestos de múltiples usuarios para entrenar un modelo LSTM real, en lugar de usar el simulador actual. Esto aumentaría drásticamente la precisión y seguridad.
+-   **Calibración de Umbrales:** Realizar un análisis estadístico (curvas ROC) para encontrar los umbrales de aceptación óptimos para voz y gesto, minimizando tanto los falsos positivos (FAR) como los falsos negativos (FRR).
+-   **Seguridad Avanzada:** Implementar mecanismos de "prueba de vida" (liveness detection) para prevenir ataques de repetición (replay attacks) con grabaciones de voz o gestos pregrabados.
+-   **Infraestructura Escalable:** Migrar de SQLite a una base de datos como PostgreSQL y desplegar la aplicación en un entorno de producción con balanceo de carga.
 
 ### Pruebas del backend
 
