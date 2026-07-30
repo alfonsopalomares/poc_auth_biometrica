@@ -2,6 +2,13 @@
 <html lang="es">
 <head>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="apple-touch-icon" sizes="180x180" href="/static/img/favicon/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/static/img/favicon/favicon-16x16.png">
+    <link rel="manifest" href="/static/img/favicon/site.webmanifest">
+    <link rel="mask-icon" href="/static/img/favicon/safari-pinned-tab.svg" color="#5bbad5">
+    <meta name="msapplication-TileColor" content="#da532c">
+    <meta name="theme-color" content="#ffffff">
     <title>Autenticación por Voz</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 2em; background-color: #f8f9fa; color: #212529; }
@@ -70,15 +77,6 @@
                 <audio id="enrollAudio" controls class="hidden"></audio>
             </div>
 
-            <!-- Sección de Verificación -->
-            <div class="action-group">
-                <h2>2. Verificación de Voz</h2>
-                <p>Graba la misma frase para verificar tu identidad.</p>
-                <button id="verifyBtn">Grabar para Verificar</button>
-                <button id="playVerifyBtn" disabled>Reproducir Voz de Verificación</button>
-                <audio id="verifyAudio" controls class="hidden"></audio>
-            </div>
-
             <pre id="result">Esperando acción...</pre>
         </div>
     </div>
@@ -88,12 +86,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // Elementos del DOM
     const usernameInput = document.getElementById('username');
     const enrollBtn = document.getElementById('enrollBtn');
-    const verifyBtn = document.getElementById('verifyBtn');
     const stopRecordingBtn = document.getElementById('stopRecordingBtn');
     const playEnrollBtn = document.getElementById('playEnrollBtn');
-    const playVerifyBtn = document.getElementById('playVerifyBtn');
     const enrollAudio = document.getElementById('enrollAudio');
-    const verifyAudio = document.getElementById('verifyAudio');
     const resultPre = document.getElementById('result');
     const statusLight = document.getElementById('statusLight');
     const statusText = document.getElementById('statusText');
@@ -101,17 +96,13 @@ document.addEventListener('DOMContentLoaded', () => {
     // Estado de la aplicación
     let mediaRecorder;
     let audioChunks = [];
-    let currentAction = null; // 'enroll' o 'verify'
-    let verificationBlob = null;
 
     // --- Lógica de Grabación ---
-
-    const startRecording = async (action) => {
+    const startRecording = async () => {
         if (!usernameInput.value.trim()) {
             resultPre.textContent = 'Por favor, introduce un nombre de usuario.';
             return;
         }
-        currentAction = action;
         audioChunks = [];
         
         try {
@@ -123,9 +114,8 @@ document.addEventListener('DOMContentLoaded', () => {
             };
 
             mediaRecorder.onstart = () => {
-                updateStatus(true, `Grabando para ${action}...`);
+                updateStatus(true, `Grabando para registrar...`);
                 enrollBtn.disabled = true;
-                verifyBtn.disabled = true;
                 stopRecordingBtn.classList.remove('hidden');
             };
 
@@ -135,19 +125,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 
                 // Convertir a WAV antes de enviar
                 const wavBlob = await convertBlobToWav(audioBlob);
-
-                if (currentAction === 'enroll') {
-                    handleEnroll(wavBlob);
-                } else if (currentAction === 'verify') {
-                    verificationBlob = wavBlob; // Guardar para reproducción
-                    playVerifyBtn.disabled = false;
-                    handleVerify(wavBlob);
-                }
+                handleEnroll(wavBlob);
 
                 // Limpiar y reactivar UI
                 stream.getTracks().forEach(track => track.stop());
                 enrollBtn.disabled = false;
-                verifyBtn.disabled = false;
                 stopRecordingBtn.classList.add('hidden');
                 updateStatus(false, 'Listo para grabar.');
             };
@@ -189,12 +171,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
-    const handleVerify = async (blob) => {
-        // This functionality is now handled by the MFA panel which uses session IDs.
-        resultPre.textContent = "La verificación de voz ahora se realiza en el panel 'Test MFA'.\n" +
-                                "Usa este panel solo para registrar un perfil de voz.";
-    };
-
     // --- Lógica de Reproducción ---
 
     const playEnrolledVoice = async () => {
@@ -217,18 +193,6 @@ document.addEventListener('DOMContentLoaded', () => {
             resultPre.textContent = `Reproduciendo audio registrado de ${username}.`;
         } catch (error) {
             resultPre.textContent = `Error al reproducir: ${error.message}`;
-        }
-    };
-
-    const playVerificationAudio = () => {
-        if (verificationBlob) {
-            const audioUrl = URL.createObjectURL(verificationBlob);
-            verifyAudio.src = audioUrl;
-            verifyAudio.classList.remove('hidden');
-            verifyAudio.play();
-            resultPre.textContent = 'Reproduciendo último audio de verificación.';
-        } else {
-            resultPre.textContent = 'No hay audio de verificación para reproducir. Graba uno primero.';
         }
     };
 
@@ -326,14 +290,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Asignar eventos a los botones
-    enrollBtn.addEventListener('click', () => startRecording('enroll'));
-    verifyBtn.addEventListener('click', () => startRecording('verify'));
+    enrollBtn.addEventListener('click', startRecording);
     stopRecordingBtn.addEventListener('click', stopRecording);
     playEnrollBtn.addEventListener('click', playEnrolledVoice);
-    playVerifyBtn.addEventListener('click', playVerificationAudio);
-
-    // Deshabilitar la verificación en esta página, ya que ahora depende de una sesión MFA.
-    verifyBtn.disabled = true;
 });
 </script>
 

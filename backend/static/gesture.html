@@ -2,6 +2,13 @@
 <html lang="es">
 <head>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="apple-touch-icon" sizes="180x180" href="/static/img/favicon/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/static/img/favicon/favicon-16x16.png">
+    <link rel="manifest" href="/static/img/favicon/site.webmanifest">
+    <link rel="mask-icon" href="/static/img/favicon/safari-pinned-tab.svg" color="#5bbad5">
+    <meta name="msapplication-TileColor" content="#da532c">
+    <meta name="theme-color" content="#ffffff">
     <title>Autenticación por Gesto</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 2em; background-color: #f8f9fa; color: #212529; }
@@ -47,8 +54,9 @@
             <li><a href="/admin">Inicio</a></li>
             <li><a href="/admin/user">Crear Usuario</a></li>
             <li><a href="/admin/voice">Gestión de Voz</a></li>
-            <li><a href="/admin/mfa">Test MFA</a></li>
             <li><a class="active" href="/admin/gesture">Gestión de Gesto</a></li>
+            <li><a href="/admin/mfa">Test MFA</a></li>
+            
         </ul>
         <div class="content">
             <h1>Autenticación por Gesto</h1>
@@ -58,43 +66,22 @@
                 <input type="text" id="username" placeholder="ej: juan.perez" value="carlos" readonly title="El registro de gestos está asociado al usuario 'carlos' por ahora.">
             </div>
 
-            <div class="panels-grid">
-                <!-- Panel de Registro -->
-                <div class="panel">
-                    <h2>1. Registrar Gesto</h2>
-                    <p>Dibuja tu firma o patrón en el recuadro para guardarlo.</p>
-                    <canvas id="enroll-canvas"></canvas>
-                    <div class="button-group">
-                        <button id="enroll-btn" disabled>Registrar</button>
-                        <button id="enroll-clear-btn" class="clear-btn">Limpiar</button>
-                    </div>
-                </div>
-
-                <!-- Panel de Verificación -->
-                <div class="panel">
-                    <h2>2. Verificar Gesto</h2>
-                    <p>Dibuja de nuevo el patrón para verificar tu identidad.</p>
-                    <canvas id="verify-canvas"></canvas>
-                    <div class="button-group">
-                        <button id="verify-btn" disabled>Verificar</button>
-                        <button id="verify-clear-btn" class="clear-btn">Limpiar</button>
-                    </div>
+            <!-- Panel de Registro -->
+            <div class="panel">
+                <h2>1. Registrar Gesto</h2>
+                <p>Dibuja tu firma o patrón en el recuadro para guardarlo.</p>
+                <canvas id="enroll-canvas"></canvas>
+                <div class="button-group">
+                    <button id="enroll-btn" disabled>Registrar</button>
+                    <button id="enroll-clear-btn" class="clear-btn">Limpiar</button>
                 </div>
             </div>
 
             <!-- Panel de Comparación -->
             <div class="panel" style="margin-top: 30px;">
-                <h2>3. Comparación Visual</h2>
-                <div class="panels-grid">
-                    <div>
-                        <h3>Patrón Almacenado</h3>
-                        <canvas id="stored-gesture-canvas"></canvas>
-                    </div>
-                    <div>
-                        <h3>Último Patrón Verificado</h3>
-                        <canvas id="verified-gesture-canvas"></canvas>
-                    </div>
-                </div>
+                <h2>2. Visualización</h2>
+                <h3>Patrón Almacenado</h3>
+                <canvas id="stored-gesture-canvas"></canvas>
             </div>
 
             <pre id="result">Esperando acción...</pre>
@@ -113,15 +100,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const enrollClearBtn = document.getElementById('enroll-clear-btn');
     let enrollPoints = [];
 
-    // Canvas y datos de Verificación
-    const verifyCanvas = document.getElementById('verify-canvas');
-    const verifyBtn = document.getElementById('verify-btn');
-    const verifyClearBtn = document.getElementById('verify-clear-btn');
-    let verifyPoints = [];
-
     // Canvas de visualización
     const storedCanvas = document.getElementById('stored-gesture-canvas');
-    const verifiedCanvas = document.getElementById('verified-gesture-canvas');
 
     /**
      * Configura un canvas para capturar gestos.
@@ -256,22 +236,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Configuración inicial
     setupCanvas(enrollCanvas, enrollPoints, enrollBtn);
-    setupCanvas(verifyCanvas, verifyPoints, verifyBtn);
-
-    // Deshabilitar verificación en esta página, ya que ahora depende de una sesión MFA
-    verifyBtn.disabled = true;
 
     enrollClearBtn.addEventListener('click', () => clearCanvas(enrollCanvas, enrollPoints, enrollBtn));
-    verifyClearBtn.addEventListener('click', () => { /* No-op */ });
 
     enrollBtn.addEventListener('click', () => apiCall('/api/enroll/gesture', enrollPoints));
-    verifyBtn.addEventListener('click', () => apiCall('/api/verify/gesture', verifyPoints));
 
     usernameInput.addEventListener('change', () => {
         const username = usernameInput.value.trim();
         if (username) {
             fetchAndDrawStoredGesture(username);
-            drawPath(verifiedCanvas, [], 'gray'); // Limpiar canvas de verificación
         }
     });
 

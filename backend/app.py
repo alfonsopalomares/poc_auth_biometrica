@@ -22,6 +22,7 @@ from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, 
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from starlette.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 # New imports for gesture recognition
 from fastdtw import fastdtw
@@ -49,6 +50,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # ==========================================
 # 2. ORIGINAL PYDANTIC MODELS & SESSION STATE
@@ -854,3 +857,7 @@ async def get_gesture_panel(username: str = Depends(get_current_username)):
 @app.get("/admin/mfa", include_in_schema=False)
 async def get_mfa_panel(username: str = Depends(get_current_username)):
     return FileResponse('static/mfa.html')
+
+@app.get("/.well-known/appspecific/com.chrome.devtools.json", include_in_schema=False)
+async def get_chrome_devtools_json():
+    return FileResponse('com.chrome.devtools.json')
