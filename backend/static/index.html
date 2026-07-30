@@ -24,15 +24,17 @@
             <li><a href="/admin/user">Crear Usuario</a></li>
             <li><a href="/admin/voice">Gestión de Voz</a></li>
             <li><a href="/admin/gesture">Gestión de Gesto</a></li>
+            <li><a href="/admin/mfa">Test MFA</a></li>
         </ul>
         <div class="content">
             <h1>PoC de Verificación Biométrica Adaptativa</h1>
             <p>Bienvenido al panel de administración de la Prueba de Concepto (PoC).</p>
-            <p>Este sistema demuestra un flujo de autenticación multimodal que combina biometría de voz y de gestos. Utilice el menú superior para navegar por las diferentes secciones:</p>
+            <p>Este sistema demuestra un flujo de autenticación multifactor (MFA) que combina biometría de voz y de gestos. Utilice el menú superior para navegar por las diferentes secciones:</p>
             <ul>
-                <li><strong>Crear Usuario:</strong> Permite dar de alta nuevos usuarios en el sistema.</li>
-                <li><strong>Gestión de Voz:</strong> Permite registrar y verificar la huella de voz de un usuario.</li>
-                <li><strong>Gestión de Gesto:</strong> Permite registrar y verificar el patrón gestual de un usuario.</li>
+                <li><strong>Crear Usuario:</strong> Permite dar de alta nuevos usuarios y configurar sus factores de autenticación (ej. 1 o 2 factores).</li>
+                <li><strong>Gestión de Voz:</strong> Permite registrar un perfil de voz para un usuario. La verificación se realiza en el panel de MFA.</li>
+                <li><strong>Gestión de Gesto:</strong> Permite registrar un patrón gestual para un usuario. La verificación se realiza en el panel de MFA.</li>
+                <li><strong>Test MFA:</strong> Simula un flujo de autenticación multifactor, iniciando una sesión y permitiendo verificar los factores requeridos para obtener acceso.</li>
             </ul>
         </div>
     </div>

@@ -47,6 +47,7 @@
             <li><a href="/admin">Inicio</a></li>
             <li><a href="/admin/user">Crear Usuario</a></li>
             <li><a href="/admin/voice">Gestión de Voz</a></li>
+            <li><a href="/admin/mfa">Test MFA</a></li>
             <li><a class="active" href="/admin/gesture">Gestión de Gesto</a></li>
         </ul>
         <div class="content">
@@ -54,7 +55,7 @@
             
             <div class="form-group">
                 <label for="username">Nombre de Usuario:</label>
-                <input type="text" id="username" placeholder="ej: juan.perez" value="carlos">
+                <input type="text" id="username" placeholder="ej: juan.perez" value="carlos" readonly title="El registro de gestos está asociado al usuario 'carlos' por ahora.">
             </div>
 
             <div class="panels-grid">
@@ -186,55 +187,53 @@ document.addEventListener('DOMContentLoaded', () => {
         actionButton.disabled = true;
     }
 
-    function drawPath(canvas, points, color = 'blue') {
+    function drawPath(canvas, points, color = 'blue', lineWidth = 3) {
         const ctx = canvas.getContext('2d');
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         if (!points || points.length < 2) return;
 
         ctx.beginPath();
         ctx.strokeStyle = color;
-        ctx.lineWidth = 3;
+        ctx.lineWidth = lineWidth;
         
         const firstPoint = points[0];
         ctx.moveTo(firstPoint[0] * canvas.width, firstPoint[1] * canvas.height);
 
         for (let i = 1; i < points.length; i++) {
             const point = points[i];
-            ctx.lineTo(point[0] * canvas.width, point[1] * canvas.height);
+            ctx.lineTo(point[0] * canvas.width, point[1] * canvas.height); // Dibuja en el rango [0,1]
         }
         ctx.stroke();
         ctx.closePath();
     }
 
-    async function apiCall(endpoint, payload) {
-        const username = usernameInput.value.trim();
+    async function apiCall(endpoint, points) {
+        const username = usernameInput.value.trim(); // El username es 'carlos' y es readonly
         if (!username) {
-            resultPre.textContent = 'Por favor, introduce un nombre de usuario.';
+            resultPre.textContent = 'Error: Nombre de usuario no definido.';
             return;
         }
-        resultPre.textContent = 'Procesando...';
+        
+        resultPre.textContent = 'Procesando registro de gesto...';
         try {
+            const payload = {
+                username: username,
+                points: points
+            };
             const response = await fetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username, points: payload })
+                body: JSON.stringify(payload)
             });
             const data = await response.json();
-            resultPre.textContent = JSON.stringify(data, null, 2);
-            
-            if (response.ok) {
-                if (endpoint.includes('verify')) {
-                    drawPath(verifiedCanvas, payload, 'green');
-                }
-                fetchAndDrawStoredGesture(username);
-            } else {
-                if (endpoint.includes('verify')) {
-                    drawPath(verifiedCanvas, payload, 'red');
-                }
-                throw new Error(data.detail || 'Error del servidor');
+            if (!response.ok) {
+                throw new Error(data.detail ? JSON.stringify(data.detail) : 'Error desconocido al registrar el gesto.');
             }
+            resultPre.textContent = `Gesto registrado con éxito:\n${JSON.stringify(data, null, 2)}`;
+            fetchAndDrawStoredGesture(username); // Vuelve a cargar el gesto para visualizarlo
         } catch (error) {
-            resultPre.textContent = `Error: ${error.message}`;
+            resultPre.textContent = `Error al registrar el gesto: ${error.message}`;
+            console.error('Error al registrar el gesto:', error);
         }
     }
 
@@ -246,7 +245,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             const data = await response.json();
-            if (data.gesture_points) {
+            if (data.gesture_points && data.gesture_points.length > 1) { // Asegurarse de que haya puntos para dibujar
                 drawPath(storedCanvas, data.gesture_points, 'blue');
             }
         } catch (error) {
@@ -259,8 +258,11 @@ document.addEventListener('DOMContentLoaded', () => {
     setupCanvas(enrollCanvas, enrollPoints, enrollBtn);
     setupCanvas(verifyCanvas, verifyPoints, verifyBtn);
 
+    // Deshabilitar verificación en esta página, ya que ahora depende de una sesión MFA
+    verifyBtn.disabled = true;
+
     enrollClearBtn.addEventListener('click', () => clearCanvas(enrollCanvas, enrollPoints, enrollBtn));
-    verifyClearBtn.addEventListener('click', () => clearCanvas(verifyCanvas, verifyPoints, verifyBtn));
+    verifyClearBtn.addEventListener('click', () => { /* No-op */ });
 
     enrollBtn.addEventListener('click', () => apiCall('/api/enroll/gesture', enrollPoints));
     verifyBtn.addEventListener('click', () => apiCall('/api/verify/gesture', verifyPoints));

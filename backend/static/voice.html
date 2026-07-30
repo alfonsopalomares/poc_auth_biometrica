@@ -44,6 +44,7 @@
             <li><a href="/admin/user">Crear Usuario</a></li>
             <li><a class="active" href="/admin/voice">Gestión de Voz</a></li>
             <li><a href="/admin/gesture">Gestión de Gesto</a></li>
+            <li><a href="/admin/mfa">Test MFA</a></li>
         </ul>
         <div class="content">
             <h1>Autenticación por Voz</h1>
@@ -189,24 +190,9 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const handleVerify = async (blob) => {
-        const username = usernameInput.value.trim();
-        resultPre.textContent = `Verificando voz para ${username}...`;
-
-        const formData = new FormData();
-        formData.append('username', username);
-        formData.append('audio', blob, `${username}_verify.wav`);
-
-        try {
-            const response = await fetch('/api/verify', {
-                method: 'POST',
-                body: formData,
-            });
-            const data = await response.json();
-            resultPre.textContent = JSON.stringify(data, null, 2);
-            if (!response.ok) throw new Error(data.detail || 'Error en el servidor');
-        } catch (error) {
-            resultPre.textContent = `Error en la verificación: ${error.message}`;
-        }
+        // This functionality is now handled by the MFA panel which uses session IDs.
+        resultPre.textContent = "La verificación de voz ahora se realiza en el panel 'Test MFA'.\n" +
+                                "Usa este panel solo para registrar un perfil de voz.";
     };
 
     // --- Lógica de Reproducción ---
@@ -345,6 +331,9 @@ document.addEventListener('DOMContentLoaded', () => {
     stopRecordingBtn.addEventListener('click', stopRecording);
     playEnrollBtn.addEventListener('click', playEnrolledVoice);
     playVerifyBtn.addEventListener('click', playVerificationAudio);
+
+    // Deshabilitar la verificación en esta página, ya que ahora depende de una sesión MFA.
+    verifyBtn.disabled = true;
 });
 </script>
 

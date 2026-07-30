@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test de Flujo MFA</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 2em; background-color: #f8f9fa; color: #212529; }
+        .container { max-width: 900px; margin: 20px auto; background-color: #fff; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); padding: 0; }
+        .content { padding: 20px; }
+        h1, h2 { color: #1a253c; border-bottom: 2px solid #e1e4e8; padding-bottom: 10px; margin-top: 0; }
+        h2 { font-size: 1.2em; margin-top: 30px; }
+        .nav-menu { list-style-type: none; margin: 0; padding: 0; overflow: hidden; background-color: #343a40; border-radius: 8px 8px 0 0; }
+        .nav-menu li { float: left; }
+        .nav-menu li a { display: block; color: white; text-align: center; padding: 14px 16px; text-decoration: none; font-weight: 500; }
+        .nav-menu li a:hover:not(.active) { background-color: #495057; }
+        .nav-menu li a.active { background-color: #007bff; }
+        button { background-color: #007bff; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; font-size: 1em; margin: 5px; }
+        button.clear-btn { background-color: #6c757d; }
+        button.clear-btn:hover { background-color: #5a6268; }
+        button.stop-btn { background-color: #dc3545; }
+        button.stop-btn:hover { background-color: #c82333; }
+        button:hover { background-color: #0056b3; }
+        button:disabled { background-color: #6c757d; cursor: not-allowed; }
+        input[type="text"] { font-size: 16px; padding: 10px; border: 1px solid #d1d5da; border-radius: 6px; width: calc(100% - 22px); }
+        .form-group, .action-group { margin-bottom: 20px; }
+        label { display: block; font-weight: 600; margin-bottom: 5px; }
+        pre { background-color: #24292e; color: #f6f8fa; padding: 15px; border-radius: 6px; white-space: pre-wrap; word-wrap: break-word; font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace; font-size: 14px; margin-top: 1em; }
+        .status-box { border: 1px solid #d1d5da; border-radius: 6px; padding: 15px; margin-top: 20px; background-color: #f8f9fa; }
+        canvas { border: 2px dashed #ccc; cursor: crosshair; touch-action: none; width: 100%; aspect-ratio: 1.5; background-color: #fafafa; margin-top: 10px; }
+        canvas.drawing { border-color: #007bff; }
+        .button-group { display: flex; gap: 10px; margin-top: 15px; }
+        .status-light { height: 12px; width: 12px; background-color: #6c757d; border-radius: 50%; display: inline-block; margin-right: 8px; }
+        .status-light.recording { background-color: #dc3545; }
+        .hidden { display: none; }
+        .status-box strong { color: #007bff; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <ul class="nav-menu">
+            <li><a href="/admin">Inicio</a></li>
+            <li><a href="/admin/user">Crear Usuario</a></li>
+            <li><a href="/admin/voice">Gestión de Voz</a></li>
+            <li><a href="/admin/gesture">Gestión de Gesto</a></li>
+            <li><a class="active" href="/admin/mfa">Test MFA</a></li>
+        </ul>
+        <div class="content">
+            <h1>Simulador de Flujo de Autenticación Multifactor (MFA)</h1>
+            
+            <div class="form-group">
+                <label for="username">Nombre de Usuario:</label>
+                <input type="text" id="username" placeholder="ej: juan.perez" value="carlos">
+            </div>
+            <button id="start-auth-btn">1. Iniciar Autenticación</button>
+
+            <div id="challenge-panel" style="display: none;">
+                <h2>2. Proporcionar Factores Biométricos</h2>
+                <p>La sesión ha comenzado. Por favor, proporciona los factores requeridos.</p>
+                <div class="status-box">
+                    <strong>ID de Sesión:</strong> <span id="session-id-span"></span><br>
+                    <strong>Estado:</strong> <span id="session-status-span"></span><br>
+                    <strong>Secuencia Requerida:</strong> <span id="required-factors-span"></span>
+                </div>
+
+                <!-- Panel de Voz -->
+                <div id="voice-input-panel" class="hidden" style="margin-top: 20px;">
+                    <h3>Factor: Voz</h3>
+                    <div class="form-group">
+                        <span id="statusLight" class="status-light"></span>
+                        <span id="statusText">Listo.</span>
+                    </div>
+                    <button id="verify-voice-btn">Grabar Voz para Verificar</button>
+                    <button id="stopRecordingBtn" class="stop-btn hidden">Detener Grabación</button>
+                </div>
+
+                <!-- Panel de Gesto -->
+                <div id="gesture-input-panel" class="hidden" style="margin-top: 20px;">
+                    <h3>Factor: Gesto</h3>
+                    <canvas id="gesture-canvas"></canvas>
+                    <button id="verify-gesture-btn" disabled>Verificar Gesto</button>
+                    <button id="gesture-clear-btn" class="clear-btn">Limpiar</button>
+                </div>
+            </div>
+
+            <pre id="result">Esperando acción...</pre>
+        </div>
+    </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    // Elementos del DOM
+    const usernameInput = document.getElementById('username');
+    const startAuthBtn = document.getElementById('start-auth-btn');
+    const challengePanel = document.getElementById('challenge-panel');
+    const sessionIdSpan = document.getElementById('session-id-span');
+    const sessionStatusSpan = document.getElementById('session-status-span');
+    const verifyVoiceBtn = document.getElementById('verify-voice-btn');
+    const verifyGestureBtn = document.getElementById('verify-gesture-btn');
+    const resultPre = document.getElementById('result');
+    const statusLight = document.getElementById('statusLight');
+    const statusText = document.getElementById('statusText');
+    const stopRecordingBtn = document.getElementById('stopRecordingBtn');
+    const voiceInputPanel = document.getElementById('voice-input-panel');
+    const gestureInputPanel = document.getElementById('gesture-input-panel');
+    const gestureCanvas = document.getElementById('gesture-canvas');
+    const gestureClearBtn = document.getElementById('gesture-clear-btn');
+
+    let currentSessionId = null;
+    let mediaRecorder;
+    let audioChunks = [];
+    let gesturePoints = [];
+
+    function updateUI(data) {
+        resultPre.textContent = JSON.stringify(data, null, 2);
+
+        if (data.session_id) {
+            currentSessionId = data.session_id;
+            sessionIdSpan.textContent = currentSessionId;
+        }
+
+        if (data.required_factors) {
+            document.getElementById('required-factors-span').textContent = JSON.stringify(data.required_factors);
+        }
+
+        if (data.status === 'challenge') {
+            challengePanel.style.display = 'block';
+            sessionStatusSpan.textContent = `Challenge - Faltan factores. Completados: [${data.completed_factors.join(', ')}]`;
+            
+            const showVoice = data.next_factors.includes('voice');
+            const showGesture = data.next_factors.includes('gesture');
+            voiceInputPanel.style.display = showVoice ? 'block' : 'none';
+            gestureInputPanel.style.display = showGesture ? 'block' : 'none';
+
+        } else if (data.status === 'authorized' || data.status === 'denied') {
+            sessionStatusSpan.textContent = `Finalizado - ${data.status.toUpperCase()}`;
+            voiceInputPanel.style.display = 'none';
+            gestureInputPanel.style.display = 'none';
+        }
+    }
+
+    startAuthBtn.addEventListener('click', async () => {
+        const username = usernameInput.value.trim();
+        if (!username) {
+            resultPre.textContent = 'Por favor, introduce un nombre de usuario.';
+            return;
+        }
+
+        resultPre.textContent = 'Iniciando sesión de autenticación...';
+        try {
+            const formData = new FormData();
+            formData.append('username', username);
+
+            const response = await fetch('/api/auth/start', {
+                method: 'POST',
+                body: formData
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.detail || 'Error del servidor');
+            
+            updateUI(data);
+
+        } catch (error) {
+            resultPre.textContent = `Error: ${error.message}`;
+            challengePanel.style.display = 'none';
+        }
+    });
+
+    async function sendVerificationRequest(modality, payload) {
+        if (!currentSessionId) {
+            resultPre.textContent = 'No hay una sesión activa.';
+            return;
+        }
+
+        resultPre.textContent = `Enviando verificación para '${modality}'...`;
+        let response;
+
+        try {
+            if (modality === 'voice') {
+                const formData = new FormData();
+                formData.append('session_id', currentSessionId);
+                formData.append('audio', payload, 'verification.wav');
+                
+                response = await fetch('/api/verify', { method: 'POST', body: formData });
+
+            } else if (modality === 'gesture') {
+                const body = {
+                    session_id: currentSessionId,
+                    points: payload
+                };
+                response = await fetch('/api/verify/gesture', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+            }
+
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.detail || 'Error del servidor');
+
+            updateUI(data);
+        } catch (error) {
+            resultPre.textContent = `Error: ${error.message}`;
+        }
+    }
+
+    // --- Lógica de Grabación (adaptada de voice.html) ---
+
+    const updateStatus = (isRecording, text) => {
+        statusText.textContent = text;
+        if (isRecording) {
+            statusLight.classList.add('recording');
+        } else {
+            statusLight.classList.remove('recording');
+        }
+    };
+
+    const startRecording = async () => {
+        audioChunks = [];
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder = new MediaRecorder(stream);
+            
+            mediaRecorder.ondataavailable = event => {
+                audioChunks.push(event.data);
+            };
+
+            mediaRecorder.onstart = () => {
+                updateStatus(true, `Grabando... Pulsa "Detener" cuando termines.`);
+                verifyVoiceBtn.disabled = true;
+                verifyGestureBtn.disabled = true;
+                stopRecordingBtn.classList.remove('hidden');
+            };
+
+            mediaRecorder.onstop = async () => {
+                updateStatus(false, 'Procesando audio...');
+                const audioBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
+                const wavBlob = await convertBlobToWav(audioBlob);
+
+                await sendVerificationRequest('voice', wavBlob);
+
+                stream.getTracks().forEach(track => track.stop());
+                stopRecordingBtn.classList.add('hidden');
+                updateStatus(false, 'Listo.');
+            };
+
+            mediaRecorder.start();
+        } catch (error) {
+            console.error('Error al iniciar la grabación:', error);
+            resultPre.textContent = `Error al acceder al micrófono: ${error.message}`;
+            updateStatus(false, 'Error de micrófono.');
+        }
+    };
+
+    const stopRecording = () => {
+        if (mediaRecorder && mediaRecorder.state === 'recording') {
+            mediaRecorder.stop();
+        }
+    };
+
+    async function convertBlobToWav(blob) {
+        if (blob.type === 'audio/wav' || (typeof AudioContext === 'undefined' && typeof webkitAudioContext === 'undefined')) {
+            return blob;
+        }
+        try {
+            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const arrayBuffer = await blob.arrayBuffer();
+            const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+            const wavBuffer = audioBufferToWav(audioBuffer);
+            return new Blob([wavBuffer], { type: 'audio/wav' });
+        } catch (e) {
+            console.error('Fallo al convertir a WAV, se enviará el blob original:', e);
+            return blob;
+        }
+    }
+
+    function audioBufferToWav(buffer) {
+        const numOfChan = buffer.numberOfChannels;
+        const length = buffer.length * numOfChan * 2 + 44;
+        const arrayBuffer = new ArrayBuffer(length);
+        const view = new DataView(arrayBuffer);
+        const channels = [];
+        let i, sample, offset = 0, pos = 0;
+
+        setUint32(0x46464952); // "RIFF"
+        setUint32(length - 8);
+        setUint32(0x45564157); // "WAVE"
+        setUint32(0x20746d66); // "fmt "
+        setUint32(16);
+        setUint16(1);
+        setUint16(numOfChan);
+        setUint32(buffer.sampleRate);
+        setUint32(buffer.sampleRate * 2 * numOfChan);
+        setUint16(numOfChan * 2);
+        setUint16(16);
+        setUint32(0x61746164); // "data"
+        setUint32(length - pos - 4);
+
+        for (i = 0; i < buffer.numberOfChannels; i++) channels.push(buffer.getChannelData(i));
+
+        while (pos < length) {
+            for (i = 0; i < numOfChan; i++) {
+                sample = Math.max(-1, Math.min(1, channels[i][offset]));
+                sample = (0.5 + sample < 0 ? sample * 32768 : sample * 32767) | 0;
+                view.setInt16(pos, sample, true);
+                pos += 2;
+            }
+            offset++;
+        }
+        return arrayBuffer;
+
+        function setUint16(data) { view.setUint16(pos, data, true); pos += 2; }
+        function setUint32(data) { view.setUint32(pos, data, true); pos += 4; }
+    }
+
+    // --- Lógica de Gesto (adaptada de gesture.html) ---
+
+    function setupCanvas(canvas, pointsArray, actionButton) {
+        const ctx = canvas.getContext('2d');
+        let drawing = false;
+        let startTime = 0;
+
+        function getPointerPos(e) {
+            const rect = canvas.getBoundingClientRect();
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            const x = (clientX - rect.left) / rect.width;
+            const y = (clientY - rect.top) / rect.height;
+            return { x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)) };
+        }
+
+        function startDrawing(e) {
+            e.preventDefault();
+            drawing = true;
+            canvas.classList.add('drawing');
+            pointsArray.length = 0;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.beginPath();
+            const { x, y } = getPointerPos(e);
+            ctx.moveTo(x * canvas.width, y * canvas.height);
+            startTime = Date.now();
+            pointsArray.push([x, y, 0]);
+        }
+
+        function draw(e) {
+            if (!drawing) return;
+            e.preventDefault();
+            const { x, y } = getPointerPos(e);
+            const time = (Date.now() - startTime); // time in ms
+            ctx.lineTo(x * canvas.width, y * canvas.height);
+            ctx.stroke();
+            pointsArray.push([x, y, time]);
+        }
+
+        function stopDrawing(e) {
+            if (!drawing) return;
+            e.preventDefault();
+            drawing = false;
+            canvas.classList.remove('drawing');
+            ctx.closePath();
+            if (pointsArray.length > 1) {
+                actionButton.disabled = false;
+            }
+        }
+        
+        canvas.addEventListener('pointerdown', startDrawing);
+        canvas.addEventListener('pointermove', draw);
+        canvas.addEventListener('pointerup', stopDrawing);
+        canvas.addEventListener('pointerleave', stopDrawing);
+    }
+
+    function clearCanvas(canvas, pointsArray, actionButton) {
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        pointsArray.length = 0;
+        actionButton.disabled = true;
+    }
+
+    // Asignar eventos
+    verifyVoiceBtn.addEventListener('click', startRecording);
+    stopRecordingBtn.addEventListener('click', stopRecording);
+    setupCanvas(gestureCanvas, gesturePoints, verifyGestureBtn);
+    gestureClearBtn.addEventListener('click', () => clearCanvas(gestureCanvas, gesturePoints, verifyGestureBtn));
+    verifyGestureBtn.addEventListener('click', () => sendVerificationRequest('gesture', gesturePoints));
+});
+</script>
+
+</body>
+</html>

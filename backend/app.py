@@ -3,6 +3,7 @@ import random
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from datetime import datetime
 import secrets
@@ -78,18 +79,30 @@ class AuthStatusResponse(BaseModel):
     auth_status: str
 
 class GestureSubmission(BaseModel):
-    username: str = Field(..., description="Username for enrollment or verification.")
+    session_id: str = Field(..., description="The authentication session ID.")
     points: List[List[float]] = Field(
         ...,
         description="List of gesture points in the form [x, y, t, pressure] or [x, y, t]",
         min_items=2,
     )
 
-class GestureVerificationResponse(BaseModel):
+class VerificationResponse(BaseModel):
+    session_id: str
     status: str
-    access: str
-    score: float
-    reason: Optional[str] = None
+    message: str
+    score: Optional[float] = None
+    completed_factors: List[str]
+    next_factors: List[str]
+
+class UserUpdate(BaseModel):
+    required_factors: Dict[str, str] = Field(..., description="Authentication sequence, e.g., {'1': 'voice', '2': 'gesture'}")
+
+class GestureEnrollPayload(BaseModel):
+    username: str
+    points: List[List[float]] = Field(
+        ...,
+        min_items=2
+    )
 
 class UserCreate(BaseModel):
     username: str
@@ -132,6 +145,7 @@ class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True)
+    required_factors = Column(JSON, nullable=False, default=lambda: {"1": "voice"})
 
 class BiometricProfile(Base):
     __tablename__ = "biometric_profiles"
@@ -150,6 +164,15 @@ class AuthLog(Base):
     modality = Column(String)
     similarity_score = Column(Float)
     decision = Column(String)
+
+class AuthSession(Base):
+    __tablename__ = "auth_sessions"
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String, unique=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    status = Column(String, default="pending") # pending, completed, failed, expired
+    expires_at = Column(DateTime)
+    completed_factors = Column(JSON, default=[])
 
 Base.metadata.create_all(bind=engine)
 
@@ -503,6 +526,30 @@ async def create_user(
     
     return {"status": "success", "message": f"User '{new_user.username}' created with ID {new_user.id}."}
 
+@app.put("/api/users/{username}", tags=["users"])
+async def update_user(
+    username: str,
+    payload: UserUpdate,
+    db: Session = Depends(get_db)
+):
+    """
+    Updates a user's settings, such as the number of required authentication factors.
+    """
+    db_user = db.query(User).filter(User.username == username).first()
+    if not db_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    valid_factors = {"voice", "gesture"}
+    for key, value in payload.required_factors.items():
+        if not key.isdigit() or int(key) < 1:
+            raise HTTPException(status_code=400, detail="Las claves de los factores deben ser enteros positivos como strings (ej: '1', '2').")
+        if value not in valid_factors:
+            raise HTTPException(status_code=400, detail=f"Factor inválido '{value}'. Debe ser uno de {valid_factors}.")
+
+    db_user.required_factors = payload.required_factors
+    db.commit()
+    
+    return {"status": "success", "message": f"User '{username}' updated. Required factors set to {payload.required_factors}."}
 
 # ==========================================
 # 8. NEW ENROLLMENT/VERIFICATION ENDPOINTS
@@ -545,12 +592,13 @@ async def enroll_user(
     return {"status": "success", "message": f"User {username} enrolled successfully."}
 
 @app.post("/api/verify", tags=["enrollment"])
-async def verify_user(
-    username: str = Form(...),
+async def verify_user_voice(
+    session_id: str = Form(...),
     audio: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
-    db_user = db.query(User).filter(User.username == username).first()
+    session, db_user, profile = _get_valid_session_data(session_id, db)
+
     if not db_user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -560,29 +608,23 @@ async def verify_user(
 
     audio_bytes = await audio.read()
     live_embedding = extract_voice_embedding(audio_bytes)
-    score = compare_embeddings(profile.voice_embedding, live_embedding)
+    similarity_score = compare_embeddings(profile.voice_embedding, live_embedding)
 
-    # --- Lógica de decisión mejorada ---
-    # Ahora, una puntuación "demasiado perfecta" se considera sospechosa (posible ataque de repetición).
-    reason = ""
-    if score >= 0.99:
-        decision = "denied"
-        reason = "Puntuación demasiado alta, posible ataque de repetición (replay attack)."
-    elif score >= VOICE_ACCEPTANCE_THRESHOLD:
-        decision = "authorized"
-    else:
-        decision = "denied"
-        reason = "La puntuación está por debajo del umbral."
+    is_match = similarity_score >= VOICE_ACCEPTANCE_THRESHOLD and similarity_score < 0.99
 
-    log_entry = AuthLog(user_id=db_user.id, modality="voice", similarity_score=score, decision=decision)
-    db.add(log_entry)
-    db.commit()
-
-    return {"status": "completed", "access": decision, "score": round(score, 4), "reason": reason}
+    return _update_session_and_get_response(
+        session=session,
+        db_user=db_user,
+        profile=profile,
+        modality="voice",
+        is_match=is_match,
+        score=similarity_score,
+        db=db
+    )
 
 @app.post("/api/enroll/gesture", tags=["enrollment", "gesture"])
 async def enroll_gesture(
-    payload: GestureSubmission,
+    payload: GestureEnrollPayload,
     db: Session = Depends(get_db)
 ):
     """
@@ -613,41 +655,139 @@ async def enroll_gesture(
     db.commit()
     return {"status": "success", "message": f"Gesture for user {username} enrolled successfully."}
 
-@app.post("/api/verify/gesture", response_model=GestureVerificationResponse, summary="Verify user's gesture against their enrolled template", tags=["verify", "gesture"])
+@app.post("/api/verify/gesture", response_model=VerificationResponse, summary="Verify user's gesture against their enrolled template", tags=["verify", "gesture"])
 async def verify_user_gesture(
     payload: GestureSubmission,
     db: Session = Depends(get_db)
 ):
     """
-    Verifies a live gesture against a user's enrolled template using embeddings.
-    This method compares not just the shape, but also the drawing dynamics (kinematics).
+    Verifies a live gesture as part of an authentication session.
     """
-    username = payload.username
+    session, db_user, profile = _get_valid_session_data(payload.session_id, db)
+
+    if not profile.gesture_embedding:
+        raise HTTPException(status_code=400, detail="User does not have a registered gesture profile")
+
+    live_embedding = extract_gesture_embedding(payload.points)
+    similarity_score = compare_embeddings(profile.gesture_embedding, live_embedding)
+    is_match = similarity_score >= GESTURE_ACCEPTANCE_THRESHOLD
+
+    return _update_session_and_get_response(
+        session=session,
+        db_user=db_user,
+        profile=profile,
+        modality="gesture",
+        is_match=is_match,
+        score=similarity_score,
+        db=db
+    )
+
+@app.post("/api/auth/start", tags=["auth"])
+async def start_authentication_session(username: str = Form(...), db: Session = Depends(get_db)):
+    """
+    Starts a new authentication session for a user.
+    """
     db_user = db.query(User).filter(User.username == username).first()
     if not db_user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    profile = db.query(BiometricProfile).filter(BiometricProfile.user_id == db_user.id).first()
-    if not profile or not profile.gesture_embedding:
-        raise HTTPException(status_code=400, detail="User does not have a registered gesture profile")
+    session_id = uuid.uuid4().hex
+    expires_at = datetime.utcnow() + timedelta(minutes=5)
 
-    # Extract embedding from the live gesture
-    live_embedding = extract_gesture_embedding(payload.points)
+    new_session = AuthSession(
+        session_id=session_id,
+        user_id=db_user.id,
+        expires_at=expires_at,
+        completed_factors=[]
+    )
+    db.add(new_session)
+    db.commit()
+
+    required_factors_dict = db_user.required_factors
+    if not required_factors_dict or "1" not in required_factors_dict:
+        raise HTTPException(status_code=400, detail="El usuario no tiene factores de autenticación configurados.")
     
-    # Compare the live embedding with the stored one using cosine similarity
-    score = compare_embeddings(profile.gesture_embedding, live_embedding)
+    first_factor = required_factors_dict["1"]
+
+    return {
+        "session_id": session_id,
+        "status": "challenge",
+        "message": f"Authentication session started. Please provide the first factor: {first_factor}.",
+        "required_factors": required_factors_dict,
+        "completed_factors": [],
+        "next_factors": [first_factor]
+    }
+
+def _get_valid_session_data(session_id: str, db: Session):
+    session = db.query(AuthSession).filter(AuthSession.session_id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.status != "pending":
+        raise HTTPException(status_code=400, detail=f"Session is already {session.status}")
+    if datetime.utcnow() > session.expires_at:
+        session.status = "expired"
+        db.commit()
+        raise HTTPException(status_code=400, detail="Session has expired")
     
-    reason = None
-    if score >= GESTURE_ACCEPTANCE_THRESHOLD:
-        decision = "authorized"
-    else:
+    user = db.query(User).filter(User.id == session.user_id).first()
+    profile = db.query(BiometricProfile).filter(BiometricProfile.user_id == user.id).first()
+    return session, user, profile
+
+def _get_available_factors(profile: BiometricProfile) -> List[str]:
+    factors = []
+    if profile:
+        if profile.voice_embedding:
+            factors.append("voice")
+        if profile.gesture_embedding:
+            factors.append("gesture")
+    return factors
+
+def _update_session_and_get_response(session: AuthSession, db_user: User, profile: BiometricProfile, modality: str, is_match: bool, score: float, db: Session):
+    if not is_match:
+        session.status = "failed"
         decision = "denied"
-        reason = f"La puntuación de similitud del gesto ({score:.2f}) está por debajo del umbral ({GESTURE_ACCEPTANCE_THRESHOLD})."
+        message = f"Verification for '{modality}' failed. Score: {score:.2f}"
+        next_factors = []
+    else:
+        # Check if the provided modality was the one expected in the sequence
+        required_factors_dict = db_user.required_factors
+        current_completed_count = len(session.completed_factors)
+        expected_factor_key = str(current_completed_count + 1)
 
-    log_entry = AuthLog(user_id=db_user.id, modality="gesture", similarity_score=score, decision=decision)
+        if expected_factor_key not in required_factors_dict or required_factors_dict[expected_factor_key] != modality:
+            session.status = "failed"
+            decision = "denied"
+            message = f"Factor incorrecto. Se esperaba '{required_factors_dict.get(expected_factor_key, 'N/A')}' pero se recibió '{modality}'."
+            next_factors = []
+        else:
+            # Correct factor provided, proceed
+            completed = list(set(session.completed_factors + [modality]))
+            session.completed_factors = completed
+            
+            if len(completed) >= len(required_factors_dict):
+                session.status = "completed"
+                decision = "authorized"
+                message = "Todos los factores requeridos han sido verificados. Acceso autorizado."
+                next_factors = []
+            else:
+                decision = "challenge"
+                next_factor_key = str(len(completed) + 1)
+                next_factor_value = required_factors_dict[next_factor_key]
+                message = f"Factor '{modality}' verificado. Siguiente factor requerido: {next_factor_value}."
+                next_factors = [next_factor_value]
+
+    log_entry = AuthLog(user_id=db_user.id, modality=modality, similarity_score=score, decision=decision)
     db.add(log_entry)
     db.commit()
-    return {"status": "completed", "access": decision, "score": round(score, 4), "reason": reason}
+
+    return {
+        "session_id": session.session_id,
+        "status": decision,
+        "message": message,
+        "score": round(score, 4),
+        "completed_factors": session.completed_factors,
+        "next_factors": next_factors
+    }
 
 @app.get("/api/audio/{username}", tags=["enrollment"])
 async def get_user_audio(username: str, db: Session = Depends(get_db)):
@@ -710,3 +850,7 @@ async def get_voice_panel(username: str = Depends(get_current_username)):
 @app.get("/admin/gesture", include_in_schema=False)
 async def get_gesture_panel(username: str = Depends(get_current_username)):
     return FileResponse('static/gesture.html')
+
+@app.get("/admin/mfa", include_in_schema=False)
+async def get_mfa_panel(username: str = Depends(get_current_username)):
+    return FileResponse('static/mfa.html')

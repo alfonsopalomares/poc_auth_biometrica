@@ -2,12 +2,13 @@
 <html lang="es">
 <head>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Crear Usuario</title>
+    <title>Gestión de Usuarios</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 2em; background-color: #f8f9fa; color: #212529; }
         .container { max-width: 900px; margin: 20px auto; background-color: #fff; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); padding: 0; }
-        .content { padding: 20px; max-width: 500px; margin: 0 auto; }
-        h1 { color: #1a253c; border-bottom: 2px solid #e1e4e8; padding-bottom: 10px; margin-top: 0; }
+        .content { padding: 20px; }
+        h1, h2 { color: #1a253c; border-bottom: 2px solid #e1e4e8; padding-bottom: 10px; margin-top: 0; }
+        h2 { font-size: 1.2em; margin-top: 30px; }
         .nav-menu { list-style-type: none; margin: 0; padding: 0; overflow: hidden; background-color: #343a40; border-radius: 8px 8px 0 0; }
         .nav-menu li { float: left; }
         .nav-menu li a { display: block; color: white; text-align: center; padding: 14px 16px; text-decoration: none; font-weight: 500; }
@@ -21,7 +22,7 @@
             border-radius: 5px;
             cursor: pointer;
             font-size: 1em;
-            margin-top: 10px;
+            margin: 5px 0;
         }
         button:hover {
             background-color: #0056b3;
@@ -39,17 +40,45 @@
             <li><a class="active" href="/admin/user">Crear Usuario</a></li>
             <li><a href="/admin/voice">Gestión de Voz</a></li>
             <li><a href="/admin/gesture">Gestión de Gesto</a></li>
+            <li><a href="/admin/mfa">Test MFA</a></li>
         </ul>
         <div class="content">
-            <h1>Crear Nuevo Usuario</h1>
-            <p>Esta página permite crear un nuevo registro de usuario en el sistema.</p>
+            <h1>Gestión de Usuarios</h1>
+
+            <h2>Crear Nuevo Usuario</h2>
+            <p>Crea un nuevo registro de usuario en el sistema.</p>
             
             <div class="form-group">
-                <label for="username">Nombre de Usuario:</label>
-                <input type="text" id="username" placeholder="ej: juan.perez">
+                <label for="new-username">Nombre de Usuario:</label>
+                <input type="text" id="new-username" placeholder="ej: juan.perez">
             </div>
             
-            <button id="createUserBtn">Crear Usuario</button>
+            <button id="create-user-btn">Crear Usuario</button>
+
+            <hr style="margin: 30px 0;">
+
+            <h2>Actualizar Secuencia de Autenticación</h2>
+            <p>Define el orden de los factores de autenticación requeridos.</p>
+            <div class="form-group">
+                <label for="update-username">Nombre de Usuario a Actualizar:</label>
+                <input type="text" id="update-username" placeholder="ej: juan.perez" value="carlos">
+            </div>
+            <div class="form-group">
+                <label for="factor-1">Factor 1:</label>
+                <select id="factor-1">
+                    <option value="voice" selected>Voz</option>
+                    <option value="gesture">Gesto</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="factor-2">Factor 2:</label>
+                <select id="factor-2">
+                    <option value="none" selected>Ninguno</option>
+                    <option value="voice">Voz</option>
+                    <option value="gesture">Gesto</option>
+                </select>
+            </div>
+            <button id="update-user-btn">Actualizar Secuencia</button>
 
             <pre id="result">Esperando acción...</pre>
         </div>
@@ -57,37 +86,77 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', () => {
-    const usernameInput = document.getElementById('username');
-    const createUserBtn = document.getElementById('createUserBtn');
+    const newUsernameInput = document.getElementById('new-username');
+    const createUserBtn = document.getElementById('create-user-btn');
+    const updateUsernameInput = document.getElementById('update-username');
+    const updateUserBtn = document.getElementById('update-user-btn');
     const resultPre = document.getElementById('result');
 
     createUserBtn.addEventListener('click', async () => {
-        const username = usernameInput.value.trim();
+        const username = newUsernameInput.value.trim();
         if (!username) {
             resultPre.textContent = 'Por favor, introduce un nombre de usuario.';
             return;
         }
 
         resultPre.textContent = `Creando usuario ${username}...`;
-        
         try {
             const response = await fetch('/api/users', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ username: username }),
             });
-
             const data = await response.json();
-
             if (!response.ok) {
                 throw new Error(data.detail || `Error del servidor: ${response.status}`);
             }
-
             resultPre.textContent = JSON.stringify(data, null, 2);
-
         } catch (error) {
             resultPre.textContent = `Error: ${error.message}`;
             console.error('Error creating user:', error);
+        }
+    });
+
+    updateUserBtn.addEventListener('click', async () => {
+        const username = updateUsernameInput.value.trim();
+        const factor1 = document.getElementById('factor-1').value;
+        const factor2 = document.getElementById('factor-2').value;
+
+        if (!username) {
+            resultPre.textContent = 'Por favor, introduce un nombre de usuario para actualizar.';
+            return;
+        }
+
+        const requiredFactors = {};
+        if (factor1 && factor1 !== 'none') {
+            requiredFactors['1'] = factor1;
+        } else {
+            resultPre.textContent = 'El Factor 1 es obligatorio.';
+            return;
+        }
+
+        if (factor2 && factor2 !== 'none') {
+            if (factor1 === factor2) {
+                resultPre.textContent = 'Los factores no pueden ser iguales.';
+                return;
+            }
+            requiredFactors['2'] = factor2;
+        }
+
+        resultPre.textContent = `Actualizando usuario...`;
+        try {
+            const response = await fetch(`/api/users/${username}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ required_factors: requiredFactors })
+            });
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data.detail || 'Error del servidor');
+            }
+            resultPre.textContent = JSON.stringify(data, null, 2);
+        } catch (error) {
+            resultPre.textContent = `Error: ${error.message}`;
         }
     });
 });
