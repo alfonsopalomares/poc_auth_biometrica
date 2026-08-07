@@ -1,0 +1,261 @@
+/*
+ * Composición: una superficie a pantalla completa por paso.
+ *
+ * Toda la interacción ocurre en cualquier punto del viewport. No hay controles que haya
+ * que localizar, porque localizar un control es exactamente lo que un usuario no vidente
+ * no puede hacer sin explorar la pantalla elemento por elemento.
+ */
+
+html,
+body,
+#root {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+.surface {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.85rem;
+
+  width: 100%;
+  padding: max(1.5rem, env(safe-area-inset-top)) 1.5rem max(1.5rem, env(safe-area-inset-bottom));
+
+  background: var(--bg);
+  color: var(--text);
+  border: none;
+  font: inherit;
+  text-align: center;
+
+  /* Sin esto, mantener apretado dispara el scroll, el menú contextual o la selección de
+     texto del navegador móvil, y la pulsación sostenida se interrumpe sola. */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  cursor: pointer;
+}
+
+.surface__eyebrow {
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.surface__title {
+  font-size: clamp(1.6rem, 7vw, 2.4rem);
+  font-weight: 700;
+  line-height: 1.15;
+  text-wrap: balance;
+}
+
+.surface__hint {
+  max-width: 30ch;
+  color: var(--text-muted);
+  font-size: clamp(1rem, 4.2vw, 1.2rem);
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.surface__hint--muted {
+  font-size: 0.95rem;
+  opacity: 0.8;
+}
+
+.surface__counter {
+  font-size: clamp(3rem, 18vw, 6rem);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  line-height: 1;
+}
+
+.surface__score {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.surface__error {
+  max-width: 30ch;
+  padding: 0.75rem 1rem;
+  background: var(--danger-surface);
+  border-left: 4px solid var(--danger);
+  border-radius: var(--radius);
+  color: var(--danger);
+  font-size: 1rem;
+}
+
+/* --- Voz ------------------------------------------------------------------ */
+
+.surface--voice.is-recording {
+  background: var(--surface-raised);
+}
+
+.pulse {
+  position: absolute;
+  width: min(60vw, 60vh);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.14;
+  transition: transform 0.08s linear;
+  pointer-events: none;
+}
+
+.surface--voice.is-recording .pulse {
+  opacity: 0.26;
+}
+
+/* --- Gesto ---------------------------------------------------------------- */
+
+.surface--gesture {
+  padding: 0;
+}
+
+.surface__canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
+.surface__overlay {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1.5rem;
+  pointer-events: none;
+}
+
+/* --- Resultado ------------------------------------------------------------ */
+
+.surface--success {
+  background: var(--success-surface);
+  color: var(--text);
+}
+
+.surface--error {
+  background: var(--danger-surface);
+}
+
+.surface--warning {
+  background: var(--warning-surface);
+}
+
+/* --- Capa informativa ----------------------------------------------------- */
+
+.overlay {
+  position: fixed;
+  inset: max(0.75rem, env(safe-area-inset-top)) 0.75rem auto;
+  z-index: 2;
+
+  display: grid;
+  gap: 0.6rem;
+
+  /* Nunca puede interceptar un toque destinado a la superficie de captura. */
+  pointer-events: none;
+}
+
+.overlay__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.overlay__user {
+  font-weight: 700;
+  color: var(--text);
+}
+
+.timer {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.timer--urgent {
+  color: var(--warning);
+}
+
+/* --- Progreso de factores ------------------------------------------------- */
+
+.progress {
+  display: flex;
+  gap: 0.5rem;
+  list-style: none;
+}
+
+.progress__step {
+  flex: 1 1 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.65rem;
+  background: var(--surface-raised);
+  border: 2px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.8rem;
+  opacity: 0.9;
+}
+
+.progress__index {
+  display: grid;
+  place-items: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--border);
+  color: var(--text);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.progress__label {
+  font-weight: 600;
+}
+
+.progress__status {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.progress__step--current {
+  border-color: var(--accent);
+}
+
+.progress__step--current .progress__index {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.progress__step--done {
+  border-color: var(--success);
+}
+
+.progress__step--done .progress__index {
+  background: var(--success);
+  color: var(--on-accent);
+}
+
+/* --- Háptico -------------------------------------------------------------- */
+
+.surface--haptic .surface__counter {
+  font-size: clamp(2.2rem, 12vw, 4rem);
+}

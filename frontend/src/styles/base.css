@@ -1,0 +1,177 @@
+/*
+ * Fundamentos: tokens, reset y utilidades de accesibilidad.
+ *
+ * Todos los pares texto/fondo de esta paleta se eligieron para superar el contraste
+ * 4.5:1 de WCAG 2.2 AA (7:1 en el modo de alto contraste). El tema sigue la preferencia
+ * del sistema y puede forzarse a alto contraste desde la barra de preferencias.
+ */
+
+:root {
+  color-scheme: dark light;
+
+  --bg: #0b1017;
+  --surface: #141c26;
+  --surface-raised: #1b2634;
+  --border: #2c3a4b;
+  --text: #f2f6fa;
+  --text-muted: #b4c2d1;
+
+  --accent: #56cffa;
+  --accent-strong: #0f4c66;
+  --on-accent: #04141c;
+
+  --success: #6ee7a8;
+  --success-surface: #10291d;
+  --danger: #ff9a9a;
+  --danger-surface: #33161a;
+  --warning: #f5cd6b;
+  --warning-surface: #302614;
+
+  --focus: #ffd54a;
+  --pad-stroke: #56cffa;
+
+  --radius: 14px;
+  --radius-lg: 20px;
+  --space: 1rem;
+
+  /* 48px es el objetivo táctil mínimo cómodo; WCAG 2.2 AA exige 24px. */
+  --touch-target: 48px;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f4f7fa;
+    --surface: #ffffff;
+    --surface-raised: #eef3f8;
+    --border: #c2d0de;
+    --text: #101820;
+    --text-muted: #4a5766;
+
+    --accent: #0f6c92;
+    --accent-strong: #0a4c68;
+    --on-accent: #ffffff;
+
+    --success: #1c6b43;
+    --success-surface: #dcf3e6;
+    --danger: #99202b;
+    --danger-surface: #fbe2e4;
+    --warning: #7a5606;
+    --warning-surface: #fbf0d4;
+
+    --focus: #a35a00;
+    --pad-stroke: #0f6c92;
+  }
+}
+
+:root[data-contrast='high'] {
+  --bg: #000000;
+  --surface: #000000;
+  --surface-raised: #101010;
+  --border: #ffffff;
+  --text: #ffffff;
+  --text-muted: #ffffff;
+
+  --accent: #ffe000;
+  --accent-strong: #ffe000;
+  --on-accent: #000000;
+
+  --success: #6bff9e;
+  --success-surface: #000000;
+  --danger: #ff8f8f;
+  --danger-surface: #000000;
+  --warning: #ffe000;
+  --warning-surface: #000000;
+
+  --focus: #ffffff;
+  --pad-stroke: #ffe000;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  /* Nunca fijamos el tamaño de fuente raíz: respeta el zoom de texto del usuario. */
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  min-height: 100dvh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: 1.0625rem;
+  line-height: 1.6;
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+h1,
+h2,
+h3 {
+  line-height: 1.25;
+  text-wrap: balance;
+}
+
+/* Un anillo de foco grueso y de color propio: es la única señal de posición que tiene
+   quien navega por teclado, y debe sobrevivir a cualquier tema. */
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+:where(h2, h3)[tabindex='-1']:focus {
+  outline: none;
+}
+
+:where(h2, h3)[tabindex='-1']:focus-visible {
+  outline: 3px solid var(--focus);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.skip-link {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 10;
+  padding: 0.75rem 1.25rem;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 700;
+  text-decoration: none;
+  transform: translateY(-120%);
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}

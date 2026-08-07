@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/static/img/favicon/favicon-16x16.png">
+    <meta name="theme-color" content="#ffffff">
+    <title>Gestión del Factor Háptico</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 2em; background-color: #f8f9fa; color: #212529; }
+        .container { max-width: 900px; margin: 20px auto; background-color: #fff; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); padding: 0; }
+        .content { padding: 20px; }
+        h1, h2 { color: #1a253c; border-bottom: 2px solid #e1e4e8; padding-bottom: 10px; margin-top: 0; }
+        h2 { font-size: 1.2em; margin-top: 30px; }
+        p { line-height: 1.6; }
+        .nav-menu { list-style-type: none; margin: 0; padding: 0; overflow: hidden; background-color: #343a40; border-radius: 8px 8px 0 0; }
+        .nav-menu li { float: left; }
+        .nav-menu li a { display: block; color: white; text-align: center; padding: 14px 16px; text-decoration: none; font-weight: 500; }
+        .nav-menu li a:hover:not(.active) { background-color: #495057; }
+        .nav-menu li a.active { background-color: #007bff; }
+        button { background-color: #007bff; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; font-size: 1em; margin: 5px 5px 5px 0; }
+        button:hover { background-color: #0056b3; }
+        button.secondary { background-color: #6c757d; }
+        button.secondary:hover { background-color: #5a6268; }
+        input[type="text"] { font-size: 16px; padding: 10px; border: 1px solid #d1d5da; border-radius: 6px; width: calc(100% - 22px); }
+        select { font-size: 16px; padding: 10px; border: 1px solid #d1d5da; border-radius: 6px; }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; font-weight: 600; margin-bottom: 5px; }
+        pre { background-color: #24292e; color: #f6f8fa; padding: 15px; border-radius: 6px; white-space: pre-wrap; word-wrap: break-word; font-family: "SFMono-Regular", Consolas, Menlo, Courier, monospace; font-size: 14px; margin-top: 1em; }
+        .slots { display: flex; flex-wrap: wrap; gap: 10px; }
+        .slot { display: flex; flex-direction: column; gap: 4px; }
+        .slot span { font-size: .85em; color: #6c757d; }
+        .nota { background-color: #fff8e1; border-left: 4px solid #ffc107; padding: 12px 15px; border-radius: 4px; margin: 15px 0; }
+        .nota strong { color: #856404; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <ul class="nav-menu">
+            <li><a href="/admin">Inicio</a></li>
+            <li><a href="/admin/user">Crear Usuario</a></li>
+            <li><a href="/admin/voice">Gestión de Voz</a></li>
+            <li><a href="/admin/gesture">Gestión de Gesto</a></li>
+            <li><a class="active" href="/admin/haptic">Gestión Háptica</a></li>
+            <li><a href="/admin/mfa">Test MFA</a></li>
+        </ul>
+        <div class="content">
+            <h1>Factor Háptico</h1>
+            <p>
+                A diferencia de la voz y el gesto, este es un factor de <strong>conocimiento</strong>,
+                no una biometría. El secreto es una secuencia de <strong>números del 1 al 3</strong>,
+                y cada número se siente como esa cantidad de vibraciones separadas. En cada sesión
+                el servidor emite una permutación nueva, así que una respuesta capturada no sirve
+                dos veces: es la propiedad que la voz y el gesto no tienen.
+            </p>
+            <p>
+                En la base sólo queda la derivación con sal (PBKDF2-SHA256). El secreto no se guarda
+                en claro y, si se filtra, se puede revocar y volver a enrolar — algo imposible con
+                una voz.
+            </p>
+
+            <div class="nota">
+                <strong>Contar, no discriminar:</strong> los símbolos son cantidades de pulsos
+                (1, 2 o 3), no formas de onda. Una versión anterior usaba patrones "corto / largo /
+                doble" y resultó inservible: distinguirlos exige del motor de vibración una
+                fidelidad que casi ningún teléfono tiene.
+                <br><br>
+                <strong>Entropía:</strong> con 3 símbolos y 4 posiciones hay 81 combinaciones.
+                Alcanza para una PoC porque un fallo invalida la sesión entera, pero es baja para
+                producción: ahí correspondería alargar el secreto o ampliar el alfabeto.
+            </div>
+
+            <h2>Registrar secreto</h2>
+
+            <div class="form-group">
+                <label for="username">Nombre de Usuario:</label>
+                <input type="text" id="username" placeholder="ej: carlos" value="carlos">
+            </div>
+
+            <div class="form-group">
+                <label>Secuencia secreta &mdash; cada número es esa cantidad de vibraciones:</label>
+                <div class="slots" id="slots"></div>
+            </div>
+
+            <button id="enroll-btn">Registrar Secreto Háptico</button>
+            <button id="check-btn" class="secondary">Consultar estado</button>
+
+            <pre id="result">Esperando acción...</pre>
+        </div>
+    </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const SYMBOLS = ['1', '2', '3'];
+    const LENGTH = 4;
+    const PULSO = 160, HUECO = 200;
+
+    // El símbolo ES la cantidad de pulsos. Contar funciona en cualquier motor de
+    // vibración; distinguir formas de onda (corto/largo/doble) no, y esa fue la versión
+    // anterior: exigía una fidelidad que la mayoría de los teléfonos no tiene.
+    const patternFor = (n) => {
+        const p = [];
+        for (let i = 0; i < Number(n); i++) { p.push(PULSO); if (i < Number(n) - 1) p.push(HUECO); }
+        return p;
+    };
+
+    const resultPre = document.getElementById('result');
+    const slotsEl = document.getElementById('slots');
+
+    for (let i = 0; i < LENGTH; i++) {
+        const wrap = document.createElement('div');
+        wrap.className = 'slot';
+
+        const label = document.createElement('span');
+        label.textContent = `Posición ${i + 1}`;
+
+        const select = document.createElement('select');
+        select.id = `sym-${i}`;
+        SYMBOLS.forEach(s => {
+            const opt = document.createElement('option');
+            opt.value = s; opt.textContent = s;
+            select.appendChild(opt);
+        });
+
+        const test = document.createElement('button');
+        test.className = 'secondary';
+        test.textContent = 'Probar';
+        test.addEventListener('click', () => {
+            const pattern = patternFor(select.value);
+            const aceptado = navigator.vibrate ? navigator.vibrate(pattern) !== false : false;
+            resultPre.textContent = aceptado
+                ? `Reproduciendo ${select.value} pulso(s). Si no sentiste nada, este equipo no tiene motor de vibración: en el teléfono el frontend lo detecta preguntándote y pasa a tonos.`
+                : 'Este navegador no vibra (iOS Safari no implementa la Vibration API). En el teléfono, el frontend usa tonos.';
+        });
+
+        wrap.append(label, select, test);
+        slotsEl.appendChild(wrap);
+    }
+
+    const leerSecreto = () =>
+        Array.from({ length: LENGTH }, (_, i) => document.getElementById(`sym-${i}`).value);
+
+    document.getElementById('enroll-btn').addEventListener('click', async () => {
+        const username = document.getElementById('username').value.trim();
+        if (!username) { resultPre.textContent = 'Introducí un nombre de usuario.'; return; }
+
+        const secret = leerSecreto();
+        resultPre.textContent = `Registrando secreto de ${secret.length} símbolos...`;
+        try {
+            const res = await fetch('/api/enroll/haptic', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, secret }),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || `Error ${res.status}`);
+            resultPre.textContent = JSON.stringify(data, null, 2)
+                + `\n\nTu secreto: ${secret.join(' - ')}`
+                + `\n(se muestra sólo en esta pantalla; en la base queda únicamente el hash)`;
+        } catch (e) {
+            resultPre.textContent = `Error: ${e.message}`;
+        }
+    });
+
+    document.getElementById('check-btn').addEventListener('click', async () => {
+        const username = document.getElementById('username').value.trim();
+        if (!username) { resultPre.textContent = 'Introducí un nombre de usuario.'; return; }
+        try {
+            const res = await fetch(`/api/haptic/${encodeURIComponent(username)}`);
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || `Error ${res.status}`);
+            resultPre.textContent = JSON.stringify(data, null, 2);
+        } catch (e) {
+            resultPre.textContent = `Error: ${e.message}`;
+        }
+    });
+});
+</script>
+</body>
+</html>
