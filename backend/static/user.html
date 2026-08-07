@@ -47,6 +47,7 @@
             <li><a class="active" href="/admin/user">Crear Usuario</a></li>
             <li><a href="/admin/voice">Gestión de Voz</a></li>
             <li><a href="/admin/gesture">Gestión de Gesto</a></li>
+            <li><a href="/admin/haptic">Gestión Háptica</a></li>
             <li><a href="/admin/mfa">Test MFA</a></li>
         </ul>
         <div class="content">
@@ -75,6 +76,7 @@
                 <select id="factor-1">
                     <option value="voice" selected>Voz</option>
                     <option value="gesture">Gesto</option>
+                    <option value="haptic">Háptico</option>
                 </select>
             </div>
             <div class="form-group">
@@ -83,6 +85,16 @@
                     <option value="none" selected>Ninguno</option>
                     <option value="voice">Voz</option>
                     <option value="gesture">Gesto</option>
+                    <option value="haptic">Háptico</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="factor-3">Factor 3:</label>
+                <select id="factor-3">
+                    <option value="none" selected>Ninguno</option>
+                    <option value="voice">Voz</option>
+                    <option value="gesture">Gesto</option>
+                    <option value="haptic">Háptico</option>
                 </select>
             </div>
             <button id="update-user-btn">Actualizar Secuencia</button>
@@ -126,29 +138,30 @@ document.addEventListener('DOMContentLoaded', () => {
 
     updateUserBtn.addEventListener('click', async () => {
         const username = updateUsernameInput.value.trim();
-        const factor1 = document.getElementById('factor-1').value;
-        const factor2 = document.getElementById('factor-2').value;
+        const elegidos = ['factor-1', 'factor-2', 'factor-3']
+            .map(id => document.getElementById(id).value)
+            .filter(v => v && v !== 'none');
 
         if (!username) {
             resultPre.textContent = 'Por favor, introduce un nombre de usuario para actualizar.';
             return;
         }
 
-        const requiredFactors = {};
-        if (factor1 && factor1 !== 'none') {
-            requiredFactors['1'] = factor1;
-        } else {
+        if (document.getElementById('factor-1').value === 'none') {
             resultPre.textContent = 'El Factor 1 es obligatorio.';
             return;
         }
 
-        if (factor2 && factor2 !== 'none') {
-            if (factor1 === factor2) {
-                resultPre.textContent = 'Los factores no pueden ser iguales.';
-                return;
-            }
-            requiredFactors['2'] = factor2;
+        // La secuencia se arma con los factores elegidos, compactada: si dejás el Factor 2
+        // en "Ninguno" y cargás el 3, se envía como 1 y 2. El backend rechaza los huecos,
+        // porque el flujo avanza contando factores completados.
+        if (new Set(elegidos).size !== elegidos.length) {
+            resultPre.textContent = 'No se puede repetir el mismo factor en la secuencia.';
+            return;
         }
+
+        const requiredFactors = {};
+        elegidos.forEach((factor, i) => { requiredFactors[String(i + 1)] = factor; });
 
         resultPre.textContent = `Actualizando usuario...`;
         try {

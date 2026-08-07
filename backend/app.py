@@ -1,3 +1,4 @@
+import hashlib
 import io
 import random
 import time
@@ -110,6 +111,37 @@ class GestureEnrollPayload(BaseModel):
 class UserCreate(BaseModel):
     username: str
 
+class HapticEnrollPayload(BaseModel):
+    username: str
+    secret: List[str] = Field(
+        ...,
+        description="Secuencia secreta de patrones vibrotáctiles, p. ej. ['largo','corto','doble','corto']",
+        min_length=3,
+        max_length=6,
+    )
+
+class HapticChallengeResponse(BaseModel):
+    session_id: str
+    symbols: List[str] = Field(..., description="Alfabeto de patrones disponibles.")
+    rounds: List[List[str]] = Field(
+        ...,
+        description="Una permutación por ronda: el orden en que el cliente debe reproducir los patrones.",
+    )
+
+class HapticSubmission(BaseModel):
+    session_id: str
+    selections: List[int] = Field(
+        ...,
+        description="Índice de la ranura elegida en cada ronda, en el mismo orden que las rondas.",
+        min_length=1,
+    )
+
+class UserSummary(BaseModel):
+    id: int
+    username: str
+    required_factors: Dict[str, str] = Field(..., description="Authentication sequence, e.g., {'1': 'voice', '2': 'gesture'}")
+    enrolled_factors: List[str] = Field(..., description="Modalities the user actually has a biometric template for.")
+
 
 @dataclass
 class SessionState:
@@ -154,10 +186,18 @@ class BiometricProfile(Base):
     __tablename__ = "biometric_profiles"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
-    voice_embedding = Column(JSON, nullable=True) 
+    voice_embedding = Column(JSON, nullable=True)
     gesture_embedding = Column(JSON, nullable=True)
     gesture_points = Column(JSON, nullable=True) # For visualization
     voice_audio = Column(BLOB, nullable=True)
+    # El factor háptico es conocimiento, no biometría: se guarda derivado con sal, nunca
+    # en claro y nunca como embedding. Un secreto es revocable; una voz no.
+    haptic_hash = Column(String, nullable=True)
+    haptic_salt = Column(String, nullable=True)
+    haptic_length = Column(Integer, nullable=True)
+    # Alfabeto vigente al momento de enrolar. Si el alfabeto del sistema cambia, un secreto
+    # viejo deja de poder reproducirse y fallaría siempre, sin que nada explique por qué.
+    haptic_alphabet = Column(JSON, nullable=True)
 
 class AuthLog(Base):
     __tablename__ = "auth_logs"
@@ -176,8 +216,45 @@ class AuthSession(Base):
     status = Column(String, default="pending") # pending, completed, failed, expired
     expires_at = Column(DateTime)
     completed_factors = Column(JSON, default=[])
+    # Permutaciones emitidas para el desafío háptico en curso. Se guardan del lado del
+    # servidor porque son la clave para traducir las ranuras elegidas de vuelta a símbolos.
+    haptic_challenge = Column(JSON, nullable=True)
 
 Base.metadata.create_all(bind=engine)
+
+
+def _ensure_columns():
+    """
+    Agrega las columnas nuevas a bases ya existentes.
+
+    `create_all` sólo crea tablas que faltan: nunca altera una tabla que ya está. Sin esto,
+    una base creada antes del factor háptico seguiría sin esas columnas y toda consulta
+    fallaría. Es un reemplazo mínimo de una herramienta de migraciones, suficiente para
+    una PoC de una sola instancia.
+    """
+    from sqlalchemy import text
+
+    pending = {
+        "biometric_profiles": {
+            "haptic_hash": "TEXT",
+            "haptic_salt": "TEXT",
+            "haptic_length": "INTEGER",
+            "haptic_alphabet": "JSON",
+        },
+        "auth_sessions": {
+            "haptic_challenge": "JSON",
+        },
+    }
+
+    with engine.begin() as connection:
+        for table, columns in pending.items():
+            existing = {row[1] for row in connection.execute(text(f"PRAGMA table_info({table})"))}
+            for name, sql_type in columns.items():
+                if name not in existing:
+                    connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}"))
+
+
+_ensure_columns()
 
 # ==========================================
 # 5. DATABASE SESSION DEPENDENCY
@@ -335,7 +412,63 @@ def compare_embeddings(emb1: list, emb2: list) -> float:
     # Ensure score is non-negative
     return max(0.0, similarity.item())
 
-GESTURE_ACCEPTANCE_THRESHOLD = 0.90 # Score, not distance. Adjusted for cosine similarity.
+GESTURE_ACCEPTANCE_THRESHOLD = 0.80 # Score, not distance. Adjusted for cosine similarity.
+
+# ==========================================
+# 7.2 HAPTIC KNOWLEDGE FACTOR
+# ==========================================
+#
+# Voz y gesto son ambos "algo que sos", y ambos viajan como una muestra que el servidor no
+# puede distinguir de una grabación: un gesto idéntico puntúa 1.0 y se acepta. Este factor
+# ataca esa clase de problema desde otro lado.
+#
+# Es un secreto de conocimiento verificado por desafío-respuesta. En cada ronda el servidor
+# emite una permutación nueva del alfabeto de patrones; el cliente los reproduce en ese
+# orden y el usuario toca durante el que corresponde al siguiente símbolo de su secreto.
+# La respuesta viaja como índices de ranura, así que una respuesta capturada no sirve en la
+# sesión siguiente: la permutación ya cambió. Eso es lo que la voz y el gesto no tienen.
+#
+# Además no se ve ni se oye: sólo vibra el teléfono en la mano. Vence al shoulder surfing
+# y también a la escucha, que es la objeción práctica de la verificación por voz en público.
+#
+# Los símbolos son CANTIDADES DE PULSOS, no formas de onda. Una primera versión usaba
+# patrones tipo "corto / largo / doble" y resultó inservible: distinguir formas exige del
+# motor de vibración una fidelidad que la mayoría de los teléfonos no tiene, y del usuario
+# una discriminación fina sin ninguna referencia contra la cual calibrar. Contar pulsos
+# separados, en cambio, funciona en cualquier hardware y no hay nada que aprender.
+
+HAPTIC_SYMBOLS = ["1", "2", "3"]
+
+# Iteraciones de derivación. Alto a propósito: el secreto tiene poca entropía, así que el
+# costo de cada intento es la defensa principal si la base se filtra.
+HAPTIC_KDF_ITERATIONS = 200_000
+
+
+def _hash_haptic_secret(secret: List[str], salt: str) -> str:
+    material = "|".join(secret).encode("utf-8")
+    return hashlib.pbkdf2_hmac(
+        "sha256", material, bytes.fromhex(salt), HAPTIC_KDF_ITERATIONS
+    ).hex()
+
+
+def _validate_haptic_secret(secret: List[str]) -> None:
+    invalid = [s for s in secret if s not in HAPTIC_SYMBOLS]
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Símbolos hápticos inválidos: {invalid}. Deben ser {HAPTIC_SYMBOLS}.",
+        )
+
+
+def _build_haptic_challenge(rounds: int) -> List[List[str]]:
+    """Una permutación independiente por ronda, con aleatoriedad criptográfica."""
+    rng = random.SystemRandom()
+    challenge = []
+    for _ in range(rounds):
+        permutation = HAPTIC_SYMBOLS.copy()
+        rng.shuffle(permutation)
+        challenge.append(permutation)
+    return challenge
 
 # --- New Gesture Processing and LSTM Simulation ---
 
@@ -529,6 +662,42 @@ async def create_user(
     
     return {"status": "success", "message": f"User '{new_user.username}' created with ID {new_user.id}."}
 
+@app.get("/api/users", response_model=List[UserSummary], summary="List users and their authentication setup", tags=["users"])
+async def list_users(db: Session = Depends(get_db)):
+    """
+    Returns every user with the authentication sequence configured for them and the
+    modalities they are actually enrolled in. Read-only: no biometric template is exposed.
+    """
+    users = db.query(User).order_by(User.username).all()
+    profiles = {p.user_id: p for p in db.query(BiometricProfile).all()}
+    return [
+        UserSummary(
+            id=user.id,
+            username=user.username,
+            required_factors=user.required_factors or {},
+            enrolled_factors=_get_available_factors(profiles.get(user.id)),
+        )
+        for user in users
+    ]
+
+@app.get("/api/users/{username}", response_model=UserSummary, summary="Get a single user's authentication setup", tags=["users"])
+async def get_user(username: str, db: Session = Depends(get_db)):
+    """
+    Same payload as /api/users, for a single username. Lets a client know which factors
+    will be requested before starting a session.
+    """
+    db_user = db.query(User).filter(User.username == username).first()
+    if not db_user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    profile = db.query(BiometricProfile).filter(BiometricProfile.user_id == db_user.id).first()
+    return UserSummary(
+        id=db_user.id,
+        username=db_user.username,
+        required_factors=db_user.required_factors or {},
+        enrolled_factors=_get_available_factors(profile),
+    )
+
 @app.put("/api/users/{username}", tags=["users"])
 async def update_user(
     username: str,
@@ -542,12 +711,24 @@ async def update_user(
     if not db_user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    valid_factors = {"voice", "gesture"}
+    valid_factors = {"voice", "gesture", "haptic"}
     for key, value in payload.required_factors.items():
         if not key.isdigit() or int(key) < 1:
             raise HTTPException(status_code=400, detail="Las claves de los factores deben ser enteros positivos como strings (ej: '1', '2').")
         if value not in valid_factors:
-            raise HTTPException(status_code=400, detail=f"Factor inválido '{value}'. Debe ser uno de {valid_factors}.")
+            raise HTTPException(status_code=400, detail=f"Factor inválido '{value}'. Debe ser uno de {sorted(valid_factors)}.")
+
+    # La secuencia tiene que ser 1..N sin huecos: el flujo avanza contando factores
+    # completados, así que un salto de '1' a '3' dejaría la sesión sin siguiente paso.
+    keys = sorted(int(k) for k in payload.required_factors)
+    if keys != list(range(1, len(keys) + 1)):
+        raise HTTPException(
+            status_code=400,
+            detail=f"La secuencia debe ser consecutiva desde 1. Recibido: {keys}.",
+        )
+
+    if len(set(payload.required_factors.values())) != len(payload.required_factors):
+        raise HTTPException(status_code=400, detail="No se puede repetir el mismo factor en la secuencia.")
 
     db_user.required_factors = payload.required_factors
     db.commit()
@@ -685,6 +866,170 @@ async def verify_user_gesture(
         db=db
     )
 
+@app.post("/api/enroll/haptic", tags=["enrollment", "haptic"])
+async def enroll_haptic(payload: HapticEnrollPayload, db: Session = Depends(get_db)):
+    """
+    Registra el secreto háptico de un usuario.
+
+    Sólo se guarda la derivación con sal: el secreto en claro no queda en la base, ni
+    siquiera cifrado de forma reversible. A diferencia de la voz o el gesto, si se filtra
+    se puede revocar y volver a enrolar otro.
+    """
+    _validate_haptic_secret(payload.secret)
+
+    db_user = db.query(User).filter(User.username == payload.username).first()
+    if not db_user:
+        db_user = User(username=payload.username)
+        db.add(db_user)
+        db.commit()
+        db.refresh(db_user)
+
+    salt = secrets.token_hex(16)
+    digest = _hash_haptic_secret(payload.secret, salt)
+
+    profile = db.query(BiometricProfile).filter(BiometricProfile.user_id == db_user.id).first()
+    if not profile:
+        profile = BiometricProfile(user_id=db_user.id)
+
+    profile.haptic_hash = digest
+    profile.haptic_salt = salt
+    profile.haptic_length = len(payload.secret)
+    profile.haptic_alphabet = HAPTIC_SYMBOLS.copy()
+
+    db.add(profile)
+    db.commit()
+    return {
+        "status": "success",
+        "message": f"Secreto háptico de {payload.username} registrado ({len(payload.secret)} símbolos).",
+        "nota": "El secreto no se devuelve nunca: en la base sólo queda su derivación con sal.",
+    }
+
+
+@app.post(
+    "/api/auth/haptic/challenge",
+    response_model=HapticChallengeResponse,
+    summary="Issue a fresh haptic challenge for the current session",
+    tags=["auth", "haptic"],
+)
+async def request_haptic_challenge(session_id: str = Form(...), db: Session = Depends(get_db)):
+    """
+    Emite una permutación nueva por ronda.
+
+    Las permutaciones no son secretas —el cliente necesita conocerlas para reproducir los
+    patrones— pero cambian en cada emisión, y son ellas las que traducen las ranuras
+    elegidas de vuelta a símbolos. Por eso una respuesta capturada no se puede reutilizar.
+    """
+    session, db_user, profile = _get_valid_session_data(session_id, db)
+
+    if not profile or not profile.haptic_hash:
+        raise HTTPException(status_code=400, detail="El usuario no tiene un secreto háptico registrado")
+
+    # Un secreto enrolado con otro alfabeto no se puede reproducir con el actual: fallaría
+    # en cada intento sin que nada indique la causa. Preferimos negarnos y explicarlo.
+    enrolled_alphabet = profile.haptic_alphabet
+    if enrolled_alphabet is not None and enrolled_alphabet != HAPTIC_SYMBOLS:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"El secreto háptico se registró con otro alfabeto ({enrolled_alphabet}) y el "
+                f"actual es {HAPTIC_SYMBOLS}. Hay que volver a registrarlo desde /admin/haptic."
+            ),
+        )
+    if enrolled_alphabet is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "El secreto háptico se registró con una versión anterior del alfabeto. "
+                "Hay que volver a registrarlo desde /admin/haptic."
+            ),
+        )
+
+    # El desafío sólo se emite si el háptico es realmente el factor que toca ahora.
+    expected_key = str(len(session.completed_factors) + 1)
+    if (db_user.required_factors or {}).get(expected_key) != "haptic":
+        raise HTTPException(status_code=400, detail="El factor háptico no es el siguiente en la secuencia")
+
+    challenge = _build_haptic_challenge(profile.haptic_length or 4)
+    session.haptic_challenge = challenge
+    db.commit()
+
+    return {"session_id": session_id, "symbols": HAPTIC_SYMBOLS, "rounds": challenge}
+
+
+@app.post(
+    "/api/verify/haptic",
+    response_model=VerificationResponse,
+    summary="Verify the haptic secret against the issued challenge",
+    tags=["verify", "haptic"],
+)
+async def verify_user_haptic(payload: HapticSubmission, db: Session = Depends(get_db)):
+    session, db_user, profile = _get_valid_session_data(payload.session_id, db)
+
+    if not profile or not profile.haptic_hash:
+        raise HTTPException(status_code=400, detail="El usuario no tiene un secreto háptico registrado")
+
+    challenge = session.haptic_challenge
+    if not challenge:
+        raise HTTPException(status_code=400, detail="No hay un desafío háptico emitido para esta sesión")
+
+    # Un desafío se usa una sola vez, pase o falle: si no, una respuesta correcta capturada
+    # se podría reenviar mientras la permutación siguiera viva.
+    session.haptic_challenge = None
+
+    if len(payload.selections) != len(challenge):
+        db.commit()
+        raise HTTPException(
+            status_code=400,
+            detail=f"Se esperaban {len(challenge)} respuestas y llegaron {len(payload.selections)}.",
+        )
+
+    if any(not 0 <= choice < len(HAPTIC_SYMBOLS) for choice in payload.selections):
+        db.commit()
+        raise HTTPException(status_code=400, detail="Alguna ranura elegida está fuera de rango.")
+
+    # Traducimos ranuras a símbolos con la permutación que emitió el servidor.
+    attempt = [permutation[choice] for permutation, choice in zip(challenge, payload.selections)]
+    digest = _hash_haptic_secret(attempt, profile.haptic_salt)
+    is_match = secrets.compare_digest(digest, profile.haptic_hash)
+
+    # Un factor de conocimiento no tiene similitud: acierta o no. Informamos 1.0 / 0.0 para
+    # mantener el mismo contrato que voz y gesto, no porque haya una medida de parecido.
+    return _update_session_and_get_response(
+        session=session,
+        db_user=db_user,
+        profile=profile,
+        modality="haptic",
+        is_match=is_match,
+        score=1.0 if is_match else 0.0,
+        db=db,
+    )
+
+
+@app.get("/api/haptic/{username}", tags=["enrollment", "haptic"])
+async def get_user_haptic(username: str, db: Session = Depends(get_db)):
+    """Metadatos del secreto háptico. Nunca devuelve el secreto ni su hash."""
+    db_user = db.query(User).filter(User.username == username).first()
+    if not db_user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    profile = db.query(BiometricProfile).filter(BiometricProfile.user_id == db_user.id).first()
+    if not profile or not profile.haptic_hash:
+        raise HTTPException(status_code=404, detail="El usuario no tiene un secreto háptico registrado")
+
+    enrolled = profile.haptic_alphabet
+    return {
+        "username": username,
+        "length": profile.haptic_length,
+        # `alphabet` es el conjunto de símbolos DISPONIBLES, no el secreto del usuario.
+        # Antes se llamaba `symbols` y se leía como si fuera lo que la persona había
+        # guardado, que es exactamente lo contrario de lo que este endpoint devuelve.
+        "alphabet": HAPTIC_SYMBOLS,
+        "alphabet_al_enrolar": enrolled,
+        "necesita_reenrolar": enrolled != HAPTIC_SYMBOLS,
+        "nota": "El secreto no se devuelve nunca: en la base sólo queda su derivación con sal.",
+    }
+
+
 @app.post("/api/auth/start", tags=["auth"])
 async def start_authentication_session(username: str = Form(...), db: Session = Depends(get_db)):
     """
@@ -718,7 +1063,8 @@ async def start_authentication_session(username: str = Form(...), db: Session = 
         "message": f"Authentication session started. Please provide the first factor: {first_factor}.",
         "required_factors": required_factors_dict,
         "completed_factors": [],
-        "next_factors": [first_factor]
+        "next_factors": [first_factor],
+        "expires_at": expires_at.isoformat() + "Z"
     }
 
 def _get_valid_session_data(session_id: str, db: Session):
@@ -743,6 +1089,8 @@ def _get_available_factors(profile: BiometricProfile) -> List[str]:
             factors.append("voice")
         if profile.gesture_embedding:
             factors.append("gesture")
+        if profile.haptic_hash:
+            factors.append("haptic")
     return factors
 
 def _update_session_and_get_response(session: AuthSession, db_user: User, profile: BiometricProfile, modality: str, is_match: bool, score: float, db: Session):
@@ -853,6 +1201,10 @@ async def get_voice_panel(username: str = Depends(get_current_username)):
 @app.get("/admin/gesture", include_in_schema=False)
 async def get_gesture_panel(username: str = Depends(get_current_username)):
     return FileResponse('static/gesture.html')
+
+@app.get("/admin/haptic", include_in_schema=False)
+async def get_haptic_panel(username: str = Depends(get_current_username)):
+    return FileResponse('static/haptic.html')
 
 @app.get("/admin/mfa", include_in_schema=False)
 async def get_mfa_panel(username: str = Depends(get_current_username)):
